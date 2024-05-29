@@ -42,7 +42,7 @@ def run_aragorn_on_chunk(chunk_path: Path, txt_output_path: Path, translation_ta
         raise Exception(f'aragorn error! error code: {proc.returncode}')
 
 
-def predict_tm_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: object):
+def predict_tm_rnas(genome: dict, contigs_path: Path):
     """Search for tmRNA sequences."""
 
     txt_output_path = cfg.tmp_path.joinpath('tmrna.tsv')
@@ -52,7 +52,7 @@ def predict_tm_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: objec
     # Split the fasta file
     split_cmd = [
         'seqkit', 'split2',
-        '-p', str(n_threads),
+        '-p', str(cfg.threads),
         '-O', str(chunk_dir),
         str(contigs_path)
     ]
@@ -63,7 +63,7 @@ def predict_tm_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: objec
     chunk_paths = list(chunk_dir.glob(f'*{contig_fasta_ext}'))
     chunk_txt_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tsv') for i in range(len(chunk_paths))]
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=n_threads) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=cfg.threads) as executor:
         futures = [
             executor.submit(run_aragorn_on_chunk, chunk_path, chunk_txt_output_path, cfg.translation_table, cfg.complete, cfg.env)
             for chunk_path, chunk_txt_output_path in zip(chunk_paths, chunk_txt_output_paths)

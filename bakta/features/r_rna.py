@@ -46,7 +46,7 @@ def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_va
         raise Exception(f'cmscan error! error code: {proc.returncode}')
 
 
-def predict_r_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: object):
+def predict_r_rnas(genome: dict, contigs_path: Path):
     """Search for ribosomal RNA sequences."""
 
     output_path = cfg.tmp_path.joinpath('rrna.tsv')
@@ -59,7 +59,7 @@ def predict_r_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: object
     # Split the fasta file
     split_cmd = [
         'seqkit', 'split2',
-        '-p', str(n_threads),
+        '-p', str(cfg.threads),
         '-O', str(chunk_dir),
         str(contigs_path)
     ]
@@ -70,7 +70,7 @@ def predict_r_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: object
     chunk_paths = list(chunk_dir.glob(f'*{contig_fasta_ext}'))
     chunk_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tblout') for i in range(len(chunk_paths))]
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=n_threads) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=cfg.threads) as executor:
         futures = [
             executor.submit(run_cmscan_on_chunk, chunk_path, chunk_output_path, cfg.db_path, z_value, cfg.env)
             for chunk_path, chunk_output_path in zip(chunk_paths, chunk_output_paths)
