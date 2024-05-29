@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import subprocess as sp
 
@@ -17,38 +18,83 @@ HIT_COVERAGE_TRUNCATED = 0.8
 log = logging.getLogger('R_RNA')
 
 
-def predict_r_rnas(genome: dict, contigs_path: Path):
-    """Search for ribosomal RNA sequences."""
-
-    output_path = cfg.tmp_path.joinpath('rrna.tsv')
+def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_value: float, env: dict):
     cmd = [
         'cmscan',
         '--noali',
         '--cut_tc',
-        '-g',  # activate glocal mode
-        '--nohmmonly',  # strictly use CM models
+        '-g',
+        '--nohmmonly',
         '--rfam',
-        '--cpu', str(cfg.threads),
-        '--tblout', str(output_path)
+        '--cpu', "1",
+        '--tblout', str(output_path),
+        '-Z', str(z_value)
     ]
-    if(genome['size'] >= 1000000):
-        cmd.append('-Z')
-        cmd.append(str(2 * genome['size'] // 1000000))
-    cmd.append(str(cfg.db_path.joinpath('rRNA')))
-    cmd.append(str(contigs_path))
+    cmd.append(str(db_path.joinpath('rRNA')))
+    cmd.append(str(chunk_path))
     log.debug('cmd=%s', cmd)
     proc = sp.run(
         cmd,
-        cwd=str(cfg.tmp_path),
-        env=cfg.env,
+        env=env,
         stdout=sp.PIPE,
         stderr=sp.PIPE,
         universal_newlines=True
     )
-    if(proc.returncode != 0):
+    if proc.returncode != 0:
         log.debug('stdout=\'%s\', stderr=\'%s\'', proc.stdout, proc.stderr)
         log.warning('rRNAs failed! cmscan-error-code=%d', proc.returncode)
         raise Exception(f'cmscan error! error code: {proc.returncode}')
+
+
+def predict_r_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: object):
+    """Search for ribosomal RNA sequences."""
+
+    output_path = cfg.tmp_path.joinpath('rrna.tsv')
+    chunk_dir = cfg.tmp_path.joinpath('chunks')
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+
+    # Calculate the -Z parameter
+    z_value = 2 * genome['size'] / 1000000
+
+    # Split the fasta file
+    split_cmd = [
+        'seqkit', 'split2',
+        '-p', str(n_threads),
+        '-O', str(chunk_dir),
+        str(contigs_path)
+    ]
+    sp.run(split_cmd, check=True)
+
+    # Determine the extension of the input fasta file
+    contig_fasta_ext = contigs_path.suffix
+    chunk_paths = list(chunk_dir.glob(f'*{contig_fasta_ext}'))
+    chunk_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tblout') for i in range(len(chunk_paths))]
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_threads) as executor:
+        futures = [
+            executor.submit(run_cmscan_on_chunk, chunk_path, chunk_output_path, cfg.db_path, z_value, cfg.env)
+            for chunk_path, chunk_output_path in zip(chunk_paths, chunk_output_paths)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                log.error('A cmscan run failed: %s', e)
+                raise
+
+    # Concatenate results
+    with output_path.open('w') as outfile:
+        for chunk_output_path in chunk_output_paths:
+            with chunk_output_path.open() as infile:
+                outfile.write(infile.read())
+
+    # Clean up chunks
+    for chunk_path in chunk_paths:
+        chunk_path.unlink()
+    for chunk_output_path in chunk_output_paths:
+        chunk_output_path.unlink()
+
+    log.info('rRNA prediction completed successfully.')
 
     rrnas = []
     contigs = {c['id']: c for c in genome['contigs']}

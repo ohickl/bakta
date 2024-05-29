@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import subprocess as sp
 
@@ -13,19 +14,16 @@ import bakta.utils as bu
 log = logging.getLogger('TM_RNA')
 
 
-def predict_tm_rnas(genome: dict, contigs_path: Path):
-    """Search for tmRNA sequences."""
-
-    txt_output_path = cfg.tmp_path.joinpath('tmrna.tsv')
+def run_aragorn_on_chunk(chunk_path: Path, txt_output_path: Path, translation_table: int, complete: bool, env: dict):
     cmd = [
         'aragorn',
         '-m',  # detect tmRNAs
-        f'-gc{cfg.translation_table}',
+        f'-gc{translation_table}',
         '-w',  # batch mode
         '-o', str(txt_output_path),
-        str(contigs_path)
+        str(chunk_path)
     ]
-    if(cfg.complete):
+    if complete:
         cmd.append('-c')  # complete circular sequence(s)
     else:
         cmd.append('-l')  # linear sequence(s)
@@ -33,16 +31,63 @@ def predict_tm_rnas(genome: dict, contigs_path: Path):
     log.debug('cmd=%s', cmd)
     proc = sp.run(
         cmd,
-        cwd=str(cfg.tmp_path),
-        env=cfg.env,
+        env=env,
         stdout=sp.PIPE,
         stderr=sp.PIPE,
         universal_newlines=True
     )
-    if(proc.returncode != 0):
+    if proc.returncode != 0:
         log.debug('stdout=\'%s\', stderr=\'%s\'', proc.stdout, proc.stderr)
         log.warning('tmRNAs failed! aragorn-error-code=%d', proc.returncode)
         raise Exception(f'aragorn error! error code: {proc.returncode}')
+
+
+def predict_tm_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: object):
+    """Search for tmRNA sequences."""
+
+    txt_output_path = cfg.tmp_path.joinpath('tmrna.tsv')
+    chunk_dir = cfg.tmp_path.joinpath('chunks')
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+
+    # Split the fasta file
+    split_cmd = [
+        'seqkit', 'split2',
+        '-p', str(n_threads),
+        '-O', str(chunk_dir),
+        str(contigs_path)
+    ]
+    sp.run(split_cmd, check=True)
+
+    # Determine the extension of the input fasta file
+    contig_fasta_ext = contigs_path.suffix
+    chunk_paths = list(chunk_dir.glob(f'*{contig_fasta_ext}'))
+    chunk_txt_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tsv') for i in range(len(chunk_paths))]
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_threads) as executor:
+        futures = [
+            executor.submit(run_aragorn_on_chunk, chunk_path, chunk_txt_output_path, cfg.translation_table, cfg.complete, cfg.env)
+            for chunk_path, chunk_txt_output_path in zip(chunk_paths, chunk_txt_output_paths)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                log.error('An aragorn run failed: %s', e)
+                raise
+
+    # Concatenate results
+    with txt_output_path.open('w') as outfile:
+        for chunk_txt_output_path in chunk_txt_output_paths:
+            with chunk_txt_output_path.open() as infile:
+                outfile.write(infile.read())
+
+    # Clean up chunks
+    for chunk_path in chunk_paths:
+        chunk_path.unlink()
+    for chunk_txt_output_path in chunk_txt_output_paths:
+        chunk_txt_output_path.unlink()
+
+    log.info('tmRNA prediction completed successfully.')
 
     tmrnas = []
     contigs = {c['id']: c for c in genome['contigs']}

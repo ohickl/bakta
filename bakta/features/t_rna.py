@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import subprocess as sp
 
@@ -42,32 +43,84 @@ AMINO_ACID_DICT = {
 }
 
 
-def predict_t_rnas(genome: dict, contigs_path: Path):
-    """Search for tRNA sequences."""
-
-    txt_output_path = cfg.tmp_path.joinpath('trna.tsv')
-    fasta_output_path = cfg.tmp_path.joinpath('trna.fasta')
+def run_trnascan_on_chunk(chunk_path: Path, txt_output_path: Path, fasta_output_path: Path, env: dict):
     cmd = [
         'tRNAscan-SE',
-        '-B',
+        '-G',
         '--output', str(txt_output_path),
         '--fasta', str(fasta_output_path),
-        '--thread', str(cfg.threads),
-        str(contigs_path)
+        '--thread', "1",
+        str(chunk_path)
     ]
     log.debug('cmd=%s', cmd)
     proc = sp.run(
         cmd,
-        cwd=str(cfg.tmp_path),
-        env=cfg.env,
+        env=env,
         stdout=sp.PIPE,
         stderr=sp.PIPE,
         universal_newlines=True
     )
-    if(proc.returncode != 0):
+    if proc.returncode != 0:
         log.debug('stdout=\'%s\', stderr=\'%s\'', proc.stdout, proc.stderr)
         log.warning('tRNAs failed! tRNAscan-SE-error-code=%d', proc.returncode)
         raise Exception(f'tRNAscan-SE error! error code: {proc.returncode}')
+
+
+def predict_t_rnas(genome: dict, contigs_path: Path, n_threads: int, cfg: object):
+    """Search for tRNA sequences."""
+
+    txt_output_path = cfg.tmp_path.joinpath('trna.tsv')
+    fasta_output_path = cfg.tmp_path.joinpath('trna.fasta')
+    chunk_dir = cfg.tmp_path.joinpath('chunks')
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+
+    # Split the fasta file
+    split_cmd = [
+        'seqkit', 'split2',
+        '-p', str(n_threads),
+        '-O', str(chunk_dir),
+        str(contigs_path)
+    ]
+    sp.run(split_cmd, check=True)
+
+    # Determine the extension of the input fasta file
+    contig_fasta_ext = contigs_path.suffix
+    chunk_paths = list(chunk_dir.glob(f'*{contig_fasta_ext}'))
+    chunk_txt_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tsv') for i in range(len(chunk_paths))]
+    chunk_fasta_output_paths = [chunk_dir.joinpath(f'chunk_{i}.fasta') for i in range(len(chunk_paths))]
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_threads) as executor:
+        futures = [
+            executor.submit(run_trnascan_on_chunk, chunk_path, chunk_txt_output_path, chunk_fasta_output_path, cfg.env)
+            for chunk_path, chunk_txt_output_path, chunk_fasta_output_path in zip(chunk_paths, chunk_txt_output_paths, chunk_fasta_output_paths)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                log.error('A tRNAscan-SE run failed: %s', e)
+                raise
+
+    # Concatenate results
+    with txt_output_path.open('w') as outfile:
+        for chunk_txt_output_path in chunk_txt_output_paths:
+            with chunk_txt_output_path.open() as infile:
+                outfile.write(infile.read())
+
+    with fasta_output_path.open('w') as outfile:
+        for chunk_fasta_output_path in chunk_fasta_output_paths:
+            with chunk_fasta_output_path.open() as infile:
+                outfile.write(infile.read())
+
+    # Clean up chunks
+    for chunk_path in chunk_paths:
+        chunk_path.unlink()
+    for chunk_txt_output_path in chunk_txt_output_paths:
+        chunk_txt_output_path.unlink()
+    for chunk_fasta_output_path in chunk_fasta_output_paths:
+        chunk_fasta_output_path.unlink()
+
+    log.info('tRNA prediction completed successfully.')
 
     trnas = {}
     contigs = {c['id']: c for c in genome['contigs']}
