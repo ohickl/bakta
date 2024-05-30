@@ -70,6 +70,7 @@ skip_sorf = None
 skip_gap = None
 skip_ori = None
 skip_plot = None
+skip_write_genbank_embl = None
 
 run_start = datetime.now()
 run_end = None
@@ -249,7 +250,7 @@ def setup(args):
     
 
     # workflow configurations
-    global skip_trna, skip_tmrna, skip_rrna, skip_ncrna, skip_ncrna_region, skip_crispr, skip_cds, skip_pseudo, skip_sorf, skip_gap, skip_ori, skip_plot
+    global skip_trna, skip_tmrna, skip_rrna, skip_ncrna, skip_ncrna_region, skip_crispr, skip_cds, skip_pseudo, skip_sorf, skip_gap, skip_ori, skip_plot, skip_write_genbank_embl
     skip_trna = args.skip_trna
     log.info('skip-tRNA=%s', skip_trna)
     skip_tmrna = args.skip_tmrna
@@ -274,6 +275,8 @@ def setup(args):
     log.info('skip-ori=%s', skip_ori)
     skip_plot = args.skip_plot
     log.info('skip-plot=%s', skip_plot)
+    skip_write_genbank_embl = args.skip_write_genbank_embl
+    log.info('skip-write-genbank-embl=%s', skip_write_genbank_embl)
 
 
 def check_readability(file_name: str, file_Path: Path):

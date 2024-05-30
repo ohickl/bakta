@@ -106,6 +106,8 @@ def parse_arguments():
     arg_group_workflow.add_argument('--skip-gap', action='store_true', dest='skip_gap', help='Skip gap detection & annotation')
     arg_group_workflow.add_argument('--skip-ori', action='store_true', dest='skip_ori', help='Skip oriC/oriT detection & annotation')
     arg_group_workflow.add_argument('--skip-plot', action='store_true', dest='skip_plot', help='Skip generation of circular genome plots')
+    # Add skip_write_genbank_embl param
+    arg_group_workflow.add_argument('--skip-write-genbank-embl', action='store_true', dest='skip_write_genbank_embl', help='Skip writing Genbank and EMBL format files')
 
     arg_group_general = parser.add_argument_group('General')
     arg_group_general.add_argument('--help', '-h', action='help', help='Show this help message and exit')

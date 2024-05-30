@@ -39,7 +39,7 @@ def search(cdss: Sequence[dict]) -> Tuple[Sequence[dict], Sequence[dict], Sequen
         '--outfmt', '6',
         '--threads', str(cfg.threads),
         '--tmpdir', str(cfg.tmp_path),  # use tmp folder
-        '--block-size', '3',  # slightly increase block size for faster executions
+        '--block-size', '6',  # slightly increase block size for faster executions
         '--fast'
     ]
     log.debug('cmd=%s', cmd)

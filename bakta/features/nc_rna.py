@@ -49,7 +49,7 @@ def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_va
 def predict_nc_rnas(genome: dict, contigs_path: Path):
     """Search for non-coding RNA genes."""
     output_path = cfg.tmp_path.joinpath('ncrna-genes.tsv')
-    chunk_dir = cfg.tmp_path.joinpath('chunks')
+    chunk_dir = cfg.tmp_path.joinpath('chunks_ncrna')
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
     # Calculate the -Z parameter
@@ -57,34 +57,57 @@ def predict_nc_rnas(genome: dict, contigs_path: Path):
 
     # Split the fasta file
     split_cmd = [
-        'seqkit', 'split2',
+        'seqkit', 'split',
+        '--quiet',
         '-p', str(cfg.threads),
         '-O', str(chunk_dir),
         str(contigs_path)
     ]
     sp.run(split_cmd, check=True)
 
+    # Determine the extension of the input fasta file
     contig_fasta_ext = contigs_path.suffix
-    chunk_paths = list(chunk_dir.glob(f'*.{contig_fasta_ext}'))
+    chunk_paths = sorted(chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
     chunk_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tblout') for i in range(len(chunk_paths))]
 
+    # Submit tasks to the executor
     with concurrent.futures.ProcessPoolExecutor(max_workers=cfg.threads) as executor:
         futures = [
             executor.submit(run_cmscan_on_chunk, chunk_path, chunk_output_path, cfg.db_path, z_value, cfg.env)
             for chunk_path, chunk_output_path in zip(chunk_paths, chunk_output_paths)
         ]
-        for future in concurrent.futures.as_completed(futures):
+
+        # Collect results in the order of submission
+        for future in futures:
             try:
                 future.result()
             except Exception as e:
                 log.error('A cmscan run failed: %s', e)
                 raise
 
-    # Concatenate results
+    # Concatenate results (since the first three lines are headers, we take the header from the first file and skip the rest)
+    final_lines = []
+    header_seen = False
     with output_path.open('w') as outfile:
         for chunk_output_path in chunk_output_paths:
             with chunk_output_path.open() as infile:
-                outfile.write(infile.read())
+                lines = infile.readlines()
+                if not header_seen:
+                    # Check if the file is empty
+                    if not lines:
+                        continue
+                    outfile.writelines(lines[:-10])  # Write the header from the first file
+                    final_lines.append(lines[-10:])  # Add footer to final lines
+                    header_seen = True
+                else:
+                    outfile.writelines(lines[2:-10])  # Skip the two first lines (header) and last 10 lines (footer) for subsequent files
+                    final_lines.append(lines[-10:])  # Add footer to final lines
+
+    # Write the final lines to output
+    final_lines_flat = [line for line_list in final_lines for line in line_list]
+    with output_path.open('a') as outfile:
+        for line in final_lines_flat:
+            outfile.write(line)
 
     # Clean up chunks
     for chunk_path in chunk_paths:

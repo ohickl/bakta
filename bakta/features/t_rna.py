@@ -71,12 +71,13 @@ def predict_t_rnas(genome: dict, contigs_path: Path):
 
     txt_output_path = cfg.tmp_path.joinpath('trna.tsv')
     fasta_output_path = cfg.tmp_path.joinpath('trna.fasta')
-    chunk_dir = cfg.tmp_path.joinpath('chunks')
+    chunk_dir = cfg.tmp_path.joinpath('chunks_trna')
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
     # Split the fasta file
     split_cmd = [
-        'seqkit', 'split2',
+        'seqkit', 'split',
+        '--quiet',
         '-p', str(cfg.threads),
         '-O', str(chunk_dir),
         str(contigs_path)
@@ -85,32 +86,45 @@ def predict_t_rnas(genome: dict, contigs_path: Path):
 
     # Determine the extension of the input fasta file
     contig_fasta_ext = contigs_path.suffix
-    chunk_paths = list(chunk_dir.glob(f'*{contig_fasta_ext}'))
+    chunk_paths = sorted(chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
     chunk_txt_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tsv') for i in range(len(chunk_paths))]
     chunk_fasta_output_paths = [chunk_dir.joinpath(f'chunk_{i}.fasta') for i in range(len(chunk_paths))]
 
+    # Submit tasks to the executor
     with concurrent.futures.ProcessPoolExecutor(max_workers=cfg.threads) as executor:
         futures = [
             executor.submit(run_trnascan_on_chunk, chunk_path, chunk_txt_output_path, chunk_fasta_output_path, cfg.env)
             for chunk_path, chunk_txt_output_path, chunk_fasta_output_path in zip(chunk_paths, chunk_txt_output_paths, chunk_fasta_output_paths)
         ]
-        for future in concurrent.futures.as_completed(futures):
+
+        # Collect results in the order of submission
+        for future in futures:
             try:
                 future.result()
             except Exception as e:
                 log.error('A tRNAscan-SE run failed: %s', e)
                 raise
 
-    # Concatenate results
+
+    # Concatenate results (since the first three lines are headers, we take the header from the first file and skip the rest)
+    header_seen = False
     with txt_output_path.open('w') as outfile:
         for chunk_txt_output_path in chunk_txt_output_paths:
             with chunk_txt_output_path.open() as infile:
-                outfile.write(infile.read())
+                lines = infile.readlines()
+                if not header_seen:
+                    # Check if the file is empty
+                    if not lines:
+                        continue
+                    outfile.writelines(lines)  # Write the header from the first file
+                    header_seen = True
+                else:
+                    outfile.writelines(lines[3:])  # Skip the first three lines (header) for subsequent files
 
     with fasta_output_path.open('w') as outfile:
         for chunk_fasta_output_path in chunk_fasta_output_paths:
             with chunk_fasta_output_path.open() as infile:
-                outfile.write(infile.read())
+                outfile.writelines(infile.readlines())
 
     # Clean up chunks
     for chunk_path in chunk_paths:

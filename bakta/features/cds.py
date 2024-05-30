@@ -500,7 +500,7 @@ def predict_pseudo_candidates(hypotheticals: Sequence[dict]) -> Sequence[dict]:
         '--outfmt', '6', 'qseqid', 'sseqid', 'pident', 'length', 'qstart', 'qend', 'sstart', 'send', 'full_sseq',
         '--threads', str(cfg.threads),
         '--tmpdir', str(cfg.tmp_path),
-        '--block-size', '3',  # slightly increase block size for faster executions
+        '--block-size', '6',  # slightly increase block size for faster executions
         '--fast'
     ]
     log.debug('cmd=%s', cmd)
@@ -591,7 +591,7 @@ def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], genome:
             '--outfmt', '5',
             '--threads', str(cfg.threads),
             '--tmpdir', str(cfg.tmp_path),  # use tmp folder
-            '--block-size', '3',  # slightly increase block size for faster executions
+            '--block-size', '6',  # slightly increase block size for faster executions
             '--query-gencode', str(cfg.translation_table),
             '--strand', 'plus',
             '--frameshift', '15',

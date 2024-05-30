@@ -91,6 +91,7 @@ def main():
         if(cfg.skip_gap): print(f'\tskip gap: {cfg.skip_gap}')
         if(cfg.skip_ori): print(f'\tskip oriC/V/T: {cfg.skip_ori}')
         if(cfg.skip_plot): print(f'\tskip plot: {cfg.skip_plot}')
+        if(cfg.skip_write_genbank_embl): print(f'\tskip write GenBank/EMBL: {cfg.skip_write_genbank_embl}')
     
     if(cfg.debug):
         print(f"\nBakta runs in DEBUG mode! Temporary data will not be destroyed at: {cfg.tmp_path}")
@@ -533,10 +534,13 @@ def main():
     gff3_path = cfg.output_path.joinpath(f'{cfg.prefix}.gff3')
     gff.write_gff3(genome, features_by_contig, gff3_path)
 
-    print('\tINSDC GenBank & EMBL...')
-    genbank_path = cfg.output_path.joinpath(f'{cfg.prefix}.gbff')
-    embl_path = cfg.output_path.joinpath(f'{cfg.prefix}.embl')
-    insdc.write_insdc(genome, features, genbank_path, embl_path)
+    if(cfg.skip_write_genbank_embl):
+        print('\tskip generation of GenBank & EMBL fromat files...')
+    else:
+        print('\tINSDC GenBank & EMBL...')
+        genbank_path = cfg.output_path.joinpath(f'{cfg.prefix}.gbff')
+        embl_path = cfg.output_path.joinpath(f'{cfg.prefix}.embl')
+        insdc.write_insdc(genome, features, genbank_path, embl_path)
 
     print('\tgenome sequences...')
     fna_path = cfg.output_path.joinpath(f'{cfg.prefix}.fna')
