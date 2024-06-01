@@ -151,8 +151,15 @@ def predict_t_rnas(genome: dict, contigs_path: Path):
             trna = OrderedDict()
             trna['type'] = bc.FEATURE_T_RNA
             trna['contig'] = contig_id
+            # Fix negative start position
+            if int(start) < 0:
+                log.warning(f'contig={contig_id}, trna_id={trna_id}, negative start position={start}, setting to 0.')
+                start = '0'
             trna['start'] = start
-            trna['stop'] = stop
+            # Fix negative stop position
+            if int(stop) < 0:
+                log.warning(f'contig={contig_id}, trna_id={trna_id}, negative stop position={stop}, setting to 0.')
+                stop = '0'
             trna['strand'] = strand
             trna['gene'] = None
             trna['product'] = 'tRNA-Xxx'
