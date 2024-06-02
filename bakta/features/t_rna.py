@@ -154,12 +154,12 @@ def predict_t_rnas(genome: dict, contigs_path: Path):
             # Fix negative start position
             if int(start) <= 0:
                 log.warning(f'contig={contig_id}, trna_id={trna_id}, negative start position={start}, setting to 1.')
-                start = '1'
+                start = 1
             trna['start'] = start
             # Fix negative stop position
             if int(stop) <= 0:
                 log.warning(f'contig={contig_id}, trna_id={trna_id}, negative stop position={stop}, setting to 1.')
-                stop = '1'
+                stop = 1
             trna['strand'] = strand
             trna['gene'] = None
             trna['product'] = 'tRNA-Xxx'
