@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import re
 import subprocess as sp
@@ -17,30 +18,170 @@ RE_CRISPR = re.compile(r'(\d{1,8})\s+(\d{2})\s+(\d{1,3}\.\d)\s+(?:(\d{2})\s+)?([
 log = logging.getLogger('CRISPR')
 
 
-def predict_crispr(genome: dict, contigs_path: Path):
-    """Predict CRISPR arrays with PILER-CR."""
-
-    output_path = cfg.tmp_path.joinpath('crispr.txt')
+def run_pilercr_on_chunk(chunk_path: Path, output_path: Path, env: dict):
     cmd = [
         'pilercr',
-        '-in', str(contigs_path),
+        '-in', str(chunk_path),
         '-out', str(output_path),
-        '-noinfo',  # omit help in output
-        '-quiet'  # silent mode
+        '-noinfo',
+        '-quiet'
     ]
     log.debug('cmd=%s', cmd)
     proc = sp.run(
         cmd,
-        cwd=str(cfg.tmp_path),
-        env=cfg.env,
+        env=env,
         stdout=sp.PIPE,
         stderr=sp.PIPE,
         universal_newlines=True
     )
-    if(proc.returncode != 0):
+    if proc.returncode != 0:
         log.debug('stdout=\'%s\', stderr=\'%s\'', proc.stdout, proc.stderr)
         log.warning('CRISPRs failed! pilercr-error-code=%d', proc.returncode)
         raise Exception(f'PILER-CR error! error code: {proc.returncode}')
+
+
+def predict_crispr(genome: dict, contigs_path: Path):
+    """Predict CRISPR arrays with PILER-CR."""
+
+    output_path = cfg.tmp_path.joinpath('crispr.txt')
+    chunk_dir = cfg.tmp_path.joinpath('chunks_crispr')
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+
+    # Split the fasta file
+    split_cmd = [
+        'seqkit', 'split',
+        '--quiet',
+        '-p', str(cfg.threads),
+        '-O', str(chunk_dir),
+        str(contigs_path)
+    ]
+    sp.run(split_cmd, check=True)
+
+    # Determine the extension of the input fasta file
+    contig_fasta_ext = contigs_path.suffix
+    chunk_paths = sorted(chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
+    chunk_output_paths = [chunk_dir.joinpath(f'chunk_{i}.txt') for i in range(len(chunk_paths))]
+
+    # Submit tasks to the executor
+    with concurrent.futures.ProcessPoolExecutor(max_workers=cfg.threads) as executor:
+        futures = [
+            executor.submit(run_pilercr_on_chunk, chunk_path, chunk_output_path, cfg.env)
+            for chunk_path, chunk_output_path in zip(chunk_paths, chunk_output_paths)
+        ]
+
+        # Collect results in the order of submission
+        for future in futures:
+            try:
+                future.result()
+            except Exception as e:
+                log.error('A PILER-CR run failed: %s', e)
+                raise
+
+    # Concatenate results
+    header = []
+    detail_reports = []
+    similarity_summaries = []
+    position_summaries = []
+    crispr_array_det_rep_counter = 0
+    crispr_array_sum_by_sim_counter = 0
+    crispr_array_sum_by_pos_counter = 0
+
+    report_line_seen = False
+    summary_by_sim_line_seen = False
+    summary_by_pos_line_seen = False
+
+    summary_by_sim_line_header = 'Array          Sequence    Position      Length  # Copies  Repeat  Spacer  +  Consensus\n' \
+                                 '=====  ================  ==========  ==========  ========  ======  ======  =  =========\n'
+    # summary_by_pos_line_header = 'Array          Sequence    Position      Length  # Copies  Repeat  Spacer    Distance  Consensus\n' \
+    #                              '=====  ================  ==========  ==========  ========  ======  ======  ==========  =========\n'
+
+    
+    for chunk_output_path in chunk_output_paths:
+
+        report_empty_skips = 0
+        summary_by_pos_empty_skips = 0
+        summary_by_sim_empty_skips = 0
+
+        with chunk_output_path.open() as infile:
+            lines = infile.readlines()
+
+            if not header:
+                header = lines[:7]
+            
+            detail_report_started = False
+            similarity_summary_started = False
+            position_summary_started = False
+
+            for line in lines[6:]:
+                if 'DETAIL REPORT' in line:
+                    detail_report_started = True
+                    similarity_summary_started = False
+                    position_summary_started = False
+                    if not report_line_seen:
+                        detail_reports.append(line)
+                        report_line_seen = True
+                elif 'SUMMARY BY SIMILARITY' in line:
+                    detail_report_started = False
+                    similarity_summary_started = True
+                    position_summary_started = False
+                    if not summary_by_sim_line_seen:
+                        similarity_summaries.append(line)
+                        similarity_summaries.append(summary_by_sim_line_header)
+                        summary_by_sim_line_seen = True
+                elif 'SUMMARY BY POSITION' in line:
+                    detail_report_started = False
+                    similarity_summary_started = False
+                    position_summary_started = True
+                    if not summary_by_pos_line_seen:
+                        position_summaries.append(line)
+                        summary_by_pos_line_seen = True
+                else:
+                    if line == '\n':
+                        continue
+                    elif detail_report_started:
+                        # Update counter of Array
+                        if line.startswith('Array '):
+                            crispr_array_det_rep_counter += 1
+                            line = f'Array {crispr_array_det_rep_counter}\n'
+                        detail_reports.append(line)
+                    elif similarity_summary_started:
+                        if line.startswith('Array ') or line.startswith('===='):
+                            continue
+                        # Update counter of Array
+                        # We need to use regex, since the array number will be in a line that doesnt start with 'Array ` or `====` or is empty
+                        # it will be a number potentially preceded by a spaces and followed by spaces
+                        if re.match(r'^\s*\d+\s+', line):
+                            crispr_array_sum_by_sim_counter += 1
+                            # Replace chunk number with actual array number and format number to be preceded by spaces up to lenght 5
+                            line = re.sub(r'^\s*\d+\s+', f'{crispr_array_sum_by_sim_counter: >5}  ', line)
+                        similarity_summaries.append(line)
+                    elif position_summary_started:
+                        # Update counter of Array same as with similarity summary
+                        if re.match(r'^\s*\d+\s+', line):
+                            crispr_array_sum_by_pos_counter += 1
+                            line = re.sub(r'^\s*\d+\s+', f'{crispr_array_sum_by_pos_counter: >5}  ', line)
+                        position_summaries.append(line)
+
+    # Assert all counters are equal
+    assert crispr_array_det_rep_counter == crispr_array_sum_by_sim_counter == crispr_array_sum_by_pos_counter
+
+    # Modify header to catch final count of arrays found
+    header[3] = f'{contigs_path}: {crispr_array_det_rep_counter} putative CRISPR arrays found.\n'
+
+    # Write the final output
+    with output_path.open('w') as outfile:
+        outfile.writelines(header)
+        outfile.writelines(detail_reports)
+        outfile.writelines(similarity_summaries)
+        outfile.writelines(position_summaries)
+
+    # Clean up chunks
+    for chunk_path in chunk_paths:
+        chunk_path.unlink()
+    for chunk_output_path in chunk_output_paths:
+        chunk_output_path.unlink()
+
+    log.info('CRISPR prediction completed successfully.')
 
     # parse crispr arrays
     crispr_arrays = {}
@@ -134,3 +275,18 @@ def predict_crispr(genome: dict, contigs_path: Path):
     crispr_arrays = crispr_arrays.values()                        
     log.info('predicted=%i', len(crispr_arrays))
     return crispr_arrays
+
+# Test case with argparse
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Predict CRISPR arrays with PILER-CR.')
+    parser.add_argument('contigs', type=Path, help='Path to the contigs file in FASTA format.')
+    parser.add_argument('--threads', type=int, default=1, help='Number of threads to use.')
+    args = parser.parse_args()
+    genome = {'contigs': [{'id': 'contig1'}, {'id': 'contig2'}]}
+
+    # Fake config
+    cfg.tmp_path = Path('.')
+    cfg.threads = args.threads
+
+    predict_crispr(genome, args.contigs)
