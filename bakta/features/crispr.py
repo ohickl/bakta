@@ -40,26 +40,13 @@ def run_pilercr_on_chunk(chunk_path: Path, output_path: Path, env: dict):
         raise Exception(f'PILER-CR error! error code: {proc.returncode}')
 
 
-def predict_crispr(genome: dict, contigs_path: Path):
+def predict_crispr(genome: dict, chunk_paths: Path):
     """Predict CRISPR arrays with PILER-CR."""
 
     output_path = cfg.tmp_path.joinpath('crispr.txt')
     chunk_dir = cfg.tmp_path.joinpath('chunks_crispr')
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
-    # Split the fasta file
-    split_cmd = [
-        'seqkit', 'split',
-        '--quiet',
-        '-p', str(cfg.threads),
-        '-O', str(chunk_dir),
-        str(contigs_path)
-    ]
-    sp.run(split_cmd, check=True)
-
-    # Determine the extension of the input fasta file
-    contig_fasta_ext = contigs_path.suffix
-    chunk_paths = sorted(chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
     chunk_output_paths = [chunk_dir.joinpath(f'chunk_{i}.txt') for i in range(len(chunk_paths))]
 
     # Submit tasks to the executor
@@ -92,16 +79,8 @@ def predict_crispr(genome: dict, contigs_path: Path):
 
     summary_by_sim_line_header = 'Array          Sequence    Position      Length  # Copies  Repeat  Spacer  +  Consensus\n' \
                                  '=====  ================  ==========  ==========  ========  ======  ======  =  =========\n'
-    # summary_by_pos_line_header = 'Array          Sequence    Position      Length  # Copies  Repeat  Spacer    Distance  Consensus\n' \
-    #                              '=====  ================  ==========  ==========  ========  ======  ======  ==========  =========\n'
 
-    
     for chunk_output_path in chunk_output_paths:
-
-        report_empty_skips = 0
-        summary_by_pos_empty_skips = 0
-        summary_by_sim_empty_skips = 0
-
         with chunk_output_path.open() as infile:
             lines = infile.readlines()
 
@@ -166,7 +145,7 @@ def predict_crispr(genome: dict, contigs_path: Path):
     assert crispr_array_det_rep_counter == crispr_array_sum_by_sim_counter == crispr_array_sum_by_pos_counter
 
     # Modify header to catch final count of arrays found
-    header[3] = f'{contigs_path}: {crispr_array_det_rep_counter} putative CRISPR arrays found.\n'
+    header[3] = f'In total {crispr_array_det_rep_counter} putative CRISPR arrays found.\n'
 
     # Write the final output
     with output_path.open('w') as outfile:
@@ -175,11 +154,11 @@ def predict_crispr(genome: dict, contigs_path: Path):
         outfile.writelines(similarity_summaries)
         outfile.writelines(position_summaries)
 
-    # Clean up chunks
-    for chunk_path in chunk_paths:
-        chunk_path.unlink()
+    # Clean up output chunks
     for chunk_output_path in chunk_output_paths:
         chunk_output_path.unlink()
+    # Remove chunk directory
+    chunk_dir.rmdir()
 
     log.info('CRISPR prediction completed successfully.')
 

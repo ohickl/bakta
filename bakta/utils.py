@@ -68,6 +68,7 @@ def parse_arguments():
 
     arg_group_io = parser.add_argument_group('Input / Output')
     arg_group_io.add_argument('--db', '-d', action='store', default=None, help='Database path (default = <bakta_path>/db). Can also be provided as BAKTA_DB environment variable.')
+    arg_group_io.add_argument('--tmp_db_path', '-td', action='store', default=None, help='Temporary database path. Use e.g. to store db in cluster node memory with `/dev/shm/db` (default = None, use path provided with --db)')
     arg_group_io.add_argument('--min-contig-length', '-m', action='store', type=int, default=1, dest='min_contig_length', help='Minimum contig size (default = 1; 200 in compliant mode)')
     arg_group_io.add_argument('--prefix', '-p', action='store', default=None, help='Prefix for output files')
     arg_group_io.add_argument('--output', '-o', action='store', default=os.getcwd(), help='Output directory (default = current working directory)')
@@ -506,3 +507,11 @@ def extract_feature_sequence(feature: dict, contig: dict) -> str:
     if(feature['strand'] == bc.STRAND_REVERSE):
         seq = str(Seq(seq).reverse_complement())
     return seq
+
+def rsync_copy(src, dst, options="-avz"):
+    command = ["rsync", options, src, dst]
+    result = sp.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error: {result.stderr}")
+    else:
+        print(result.stdout)

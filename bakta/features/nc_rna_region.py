@@ -45,7 +45,7 @@ def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_va
         raise Exception(f'cmscan error! error code: {proc.returncode}')
 
 
-def predict_nc_rna_regions(genome: dict, contigs_path: Path):
+def predict_nc_rna_regions(genome: dict, chunk_paths: Path):
     """Search for non-coding RNA regions."""
 
     output_path = cfg.tmp_path.joinpath('ncrna-regions.tsv')
@@ -55,19 +55,6 @@ def predict_nc_rna_regions(genome: dict, contigs_path: Path):
     # Calculate the -Z parameter
     z_value = 2 * genome['size'] / 1000000
 
-    # Split the fasta file
-    split_cmd = [
-        'seqkit', 'split',
-        '--quiet',
-        '-p', str(cfg.threads),
-        '-O', str(chunk_dir),
-        str(contigs_path)
-    ]
-    sp.run(split_cmd, check=True)
-
-    # Determine the extension of the input fasta file
-    contig_fasta_ext = contigs_path.suffix
-    chunk_paths = sorted(chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
     chunk_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tblout') for i in range(len(chunk_paths))]
 
     # Submit tasks to the executor
@@ -109,11 +96,11 @@ def predict_nc_rna_regions(genome: dict, contigs_path: Path):
         for line in final_lines_flat:
             outfile.write(line)
 
-    # Clean up chunks
-    for chunk_path in chunk_paths:
-        chunk_path.unlink()
+   # Clean up output chunks
     for chunk_output_path in chunk_output_paths:
         chunk_output_path.unlink()
+    # Remove chunk directory
+    chunk_dir.rmdir()
 
     log.info('ncRNA regions prediction completed successfully.')
 

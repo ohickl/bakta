@@ -313,7 +313,15 @@ def search(sorfs: Sequence[dict], cluster_type: str):
     sorf_aa_path = cfg.tmp_path.joinpath('sorf.faa')
     orf.write_internal_faa(sorfs, sorf_aa_path)
     diamond_output_path = cfg.tmp_path.joinpath('diamond.sorf.tsv')
-    diamond_db_path = cfg.db_path.joinpath('sorf.dmnd')
+
+    # If tmp db dir is set, copy dimanod db to tmp db dir
+    if cfg.tmp_db_path:
+        print('copy sORF diamond db to tmp db directory...')
+        bu.rsync_copy(f'{cfg.db_path}/sorf.dmnd', f'{cfg.tmp_db_path}/sorf.dmnd')
+        diamond_db_path = cfg.tmp_db_path.joinpath('sorf.dmnd')
+    else:
+        diamond_db_path = cfg.db_path.joinpath('sorf.dmnd')
+    
     cmd = [
         'diamond',
         'blastp',
@@ -373,4 +381,10 @@ def search(sorfs: Sequence[dict], cluster_type: str):
         else:
             sorfs_not_found.append(sorf)
     log.info('found=%i', len(sorfs_found))
+
+    # Cleanup tmp diamond db
+    if cfg.tmp_db_path:
+        print('remove sORF diamond db from tmp db directory...')
+        diamond_db_path.unlink()
+
     return sorfs_found, sorfs_not_found

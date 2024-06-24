@@ -28,6 +28,7 @@ debug = None
 
 # input / output configuration
 db_path = None
+tmp_db_path = None
 db_info = None
 tmp_path = None
 genome_path = None
@@ -91,8 +92,13 @@ def setup(args):
         verbose = True
 
     # input / output path configurations
-    global db_path, db_info, tmp_path, genome_path, min_contig_length, prefix, output_path, force
+    global db_path, tmp_db_path, db_info, tmp_path, genome_path, min_contig_length, prefix, output_path, force
     db_path = check_db_path(args)
+
+    tmp_db_path = args.tmp_db_path
+    if tmp_db_path:
+        log.info('tmp-db-path=%s', tmp_db_path)
+
     tmp_path = check_tmp_path(args)
 
     try:

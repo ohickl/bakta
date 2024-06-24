@@ -8,7 +8,7 @@ from typing import Sequence, Tuple
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.features.orf as orf
-
+import bakta.utils as bu
 
 ############################################################################
 # PSCC DB columns
@@ -25,7 +25,15 @@ def search(cdss: Sequence[dict]) -> Tuple[Sequence[dict], Sequence[dict], Sequen
     cds_aa_path = cfg.tmp_path.joinpath('cds.pscc.faa')
     orf.write_internal_faa(cdss, cds_aa_path)
     diamond_output_path = cfg.tmp_path.joinpath('diamond.pscc.tsv')
-    diamond_db_path = cfg.db_path.joinpath('pscc.dmnd')
+
+    # If tmp db dir is set, copy dimanod db to tmp db dir
+    if cfg.tmp_db_path:
+        print('copy PSCC diamond db to tmp db directory...')
+        bu.rsync_copy(f'{cfg.db_path}/pscc.dmnd', f'{cfg.tmp_db_path}/pscc.dmnd')
+        diamond_db_path = cfg.tmp_db_path.joinpath('pscc.dmnd')
+    else:
+        diamond_db_path = cfg.db_path.joinpath('pscc.dmnd')
+
     cmd = [
         'diamond',
         'blastp',
@@ -85,6 +93,12 @@ def search(cdss: Sequence[dict]) -> Tuple[Sequence[dict], Sequence[dict], Sequen
         else:
             cds_not_found.append(cds)
     log.info('found: PSCC=%i', len(psccs_found))
+
+     # Cleanup tmp diamond db
+    if cfg.tmp_db_path:
+        print('remove PSCC diamond db from tmp db directory...')
+        diamond_db_path.unlink()
+
     return psccs_found, cds_not_found
 
 

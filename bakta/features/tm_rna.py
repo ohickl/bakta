@@ -42,26 +42,13 @@ def run_aragorn_on_chunk(chunk_path: Path, txt_output_path: Path, translation_ta
         raise Exception(f'aragorn error! error code: {proc.returncode}')
 
 
-def predict_tm_rnas(genome: dict, contigs_path: Path):
+def predict_tm_rnas(genome: dict, chunk_paths: Path):
     """Search for tmRNA sequences."""
 
     txt_output_path = cfg.tmp_path.joinpath('tmrna.tsv')
     chunk_dir = cfg.tmp_path.joinpath('chunks_tmrna')
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
-    # Split the fasta file
-    split_cmd = [
-        'seqkit', 'split',
-        '--quiet',
-        '-p', str(cfg.threads),
-        '-O', str(chunk_dir),
-        str(contigs_path)
-    ]
-    sp.run(split_cmd, check=True)
-
-    # Determine the extension of the input fasta file
-    contig_fasta_ext = contigs_path.suffix
-    chunk_paths = sorted(chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
     chunk_txt_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tsv') for i in range(len(chunk_paths))]
 
     # Submit tasks to the executor
@@ -106,12 +93,12 @@ def predict_tm_rnas(genome: dict, contigs_path: Path):
     with txt_output_path.open('a') as outfile:
         outfile.write(f'>end\t{sequences} sequences {tmrna_genes} tmRNA genes, nothing found in {no_hit_sequences} sequences, ({sensitivity:.2f}% sensitivity)\n')
 
-    # Clean up chunks
-    for chunk_path in chunk_paths:
-        chunk_path.unlink()
+    # Clean up output chunks
     for chunk_txt_output_path in chunk_txt_output_paths:
         chunk_txt_output_path.unlink()
-
+    # Remove chunk directory
+    chunk_dir.rmdir()
+    
     log.info('tmRNA prediction completed successfully.')
 
     tmrnas = []
