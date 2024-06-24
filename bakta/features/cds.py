@@ -482,7 +482,15 @@ def predict_pseudo_candidates(hypotheticals: Sequence[dict]) -> Sequence[dict]:
     """
     Conduct homology search of hypothetical CDSs against the PSC db to find pseudogene candidates.
     """
-    diamond_db_path = cfg.db_path.joinpath('psc.dmnd')
+
+    # If tmp db dir is set, copy dimanod db to tmp db dir
+    if cfg.tmp_db_path:
+        print('copy PSC diamond db to tmp db directory...')
+        bu.rsync_copy(f'{cfg.db_path}/psc.dmnd', f'{cfg.tmp_db_path}/psc.dmnd')
+        diamond_db_path = cfg.tmp_db_path.joinpath('psc.dmnd')
+    else:
+        diamond_db_path = cfg.db_path.joinpath('psc.dmnd')
+
     diamond_output_path = cfg.tmp_path.joinpath('cds.pseudo.candidates.diamond.tsv')
     cds_hypotheticals_faa_path = cfg.tmp_path.joinpath('cds.pseudo.candidates.faa')
     orf.write_internal_faa(hypotheticals, cds_hypotheticals_faa_path)
@@ -545,6 +553,12 @@ def predict_pseudo_candidates(hypotheticals: Sequence[dict]) -> Sequence[dict]:
                     cds['contig'], cds['start'], cds['stop'], cds['strand'], len(cds['aa']), query_cov, subject_cov, identity, cluster_id
                 )
     log.info('found: pseudogene-candidates=%i', len(pseudo_candidates))
+
+    # Cleanup tmp diamond db
+    if cfg.tmp_db_path:
+        print('remove PSC diamond db from tmp db directory...')
+        diamond_db_path.unlink()
+
     return pseudo_candidates
 
 
