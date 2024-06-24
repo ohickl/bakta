@@ -147,6 +147,7 @@ def predict_t_rnas(genome: dict, chunk_paths: Path):
             if int(stop) <= 0:
                 log.warning(f'contig={contig_id}, trna_id={trna_id}, negative stop position={stop}, setting to 1.')
                 stop = 1
+            trna['stop'] = stop
             trna['strand'] = strand
             trna['gene'] = None
             trna['product'] = 'tRNA-Xxx'
