@@ -1,6 +1,7 @@
 import argparse
 import collections
 import csv
+import glob
 import hashlib
 import logging
 import os
@@ -509,7 +510,18 @@ def extract_feature_sequence(feature: dict, contig: dict) -> str:
     return seq
 
 def rsync_copy(src, dst, options="-avz"):
-    command = ["rsync", options, src, dst]
+    if '*' in src or '?' in src or '[' in src:
+        # Wildcards detected, use glob
+        src_expanded = glob.glob(src)
+        if not src_expanded:
+            print(f"Error: No files found matching {src}")
+            return
+        sources = src_expanded
+    else:
+        # No wildcards, use the path as-is
+        sources = [src]
+    
+    command = ["rsync", options] + sources + [dst]
     result = sp.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Error: {result.stderr}")

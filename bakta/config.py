@@ -97,6 +97,7 @@ def setup(args):
 
     tmp_db_path = args.tmp_db_path
     if tmp_db_path:
+        tmp_db_path = Path(tmp_db_path).resolve()
         log.info('tmp-db-path=%s', tmp_db_path)
 
     tmp_path = check_tmp_path(args)
