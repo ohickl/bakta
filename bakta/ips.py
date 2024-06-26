@@ -28,7 +28,14 @@ def lookup(features: Sequence[dict]) -> Tuple[Sequence[dict], Sequence[dict]]:
         features_found = []
         features_not_found = []
         rec_futures = []
-        with sqlite3.connect(f"file:{cfg.db_path.joinpath('bakta.db')}?mode=ro&nolock=1&cache=shared", uri=True, check_same_thread=False) as conn:
+
+        # Change db path if tmp_db_path is set
+        if cfg.tmp_db_path:
+            db_path = cfg.tmp_db_path
+        else:
+            db_path = cfg.db_path
+
+        with sqlite3.connect(f"file:{db_path.joinpath('bakta.db')}?mode=ro&nolock=1&cache=shared", uri=True, check_same_thread=False) as conn:
             conn.execute('PRAGMA omit_readlock;')
             conn.row_factory = sqlite3.Row
             with ThreadPoolExecutor(max_workers=max(10, cfg.threads)) as tpe:  # use min 10 threads for IO bound non-CPU lookups

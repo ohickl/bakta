@@ -509,7 +509,7 @@ def extract_feature_sequence(feature: dict, contig: dict) -> str:
         seq = str(Seq(seq).reverse_complement())
     return seq
 
-def rsync_copy(src, dst, options="-avz"):
+def rsync_copy(src, dst, options="-avq"):
     if '*' in src or '?' in src or '[' in src:
         # Wildcards detected, use glob
         src_expanded = glob.glob(src)

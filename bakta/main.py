@@ -208,12 +208,7 @@ def main():
     else:
         # Copy rRNA database to tmp db directory, if set
         if cfg.tmp_db_path:
-            print('copy rRNA database to tmp db directory...')
-            start_time = time.perf_counter()
             bu.rsync_copy(f'{cfg.db_path}/rRNA*', cfg.tmp_db_path)
-            end_time = time.perf_counter()
-            time_min = (end_time - start_time) / 60
-            print(f'\ttime: {time_min:.2f} min')
 
         print('predict rRNAs...')
         start_time = time.perf_counter()
@@ -225,13 +220,8 @@ def main():
 
         # Clean up tmp rRNA database, if set
         if cfg.tmp_db_path:
-            print('remove rRNA database from tmp db directory...')
-            start_time = time.perf_counter()
             for file in Path(cfg.tmp_db_path).iterdir():
                 file.unlink()
-            end_time = time.perf_counter()
-            time_min = (end_time - start_time) / 60
-            print(f'\ttime: {time_min:.2f} min')
 
     ############################################################################
     # ncRNA gene prediction
@@ -241,12 +231,7 @@ def main():
     else:
         # Copy ncRNA database to tmp db directory, if set
         if cfg.tmp_db_path:
-            print('copy ncRNA database to tmp db directory...')
-            start_time = time.perf_counter()
             bu.rsync_copy(f'{cfg.db_path}/ncRNA-genes*', cfg.tmp_db_path)
-            end_time = time.perf_counter()
-            time_min = (end_time - start_time) / 60
-            print(f'\ttime: {time_min:.2f} min')
             
         print('predict ncRNAs...')
         start_time = time.perf_counter()
@@ -258,13 +243,8 @@ def main():
 
         # Clean up tmp ncRNA database, if set
         if cfg.tmp_db_path:
-            print('remove ncRNA database from tmp db directory...')
-            start_time = time.perf_counter()
             for file in Path(cfg.tmp_db_path).iterdir():
                 file.unlink()
-            end_time = time.perf_counter()
-            time_min = (end_time - start_time) / 60
-            print(f'\ttime: {time_min:.2f} min')
 
     ############################################################################
     # ncRNA region prediction
@@ -274,12 +254,7 @@ def main():
     else:
         # Copy ncRNA region database to tmp db directory, if set
         if cfg.tmp_db_path:
-            print('copy ncRNA region database to tmp db directory...')
-            start_time = time.perf_counter()
             bu.rsync_copy(f'{cfg.db_path}/ncRNA-regions*', cfg.tmp_db_path)
-            end_time = time.perf_counter()
-            time_min = (end_time - start_time) / 60
-            print(f'\ttime: {time_min:.2f} min')
         
         print('predict ncRNA regions...')
         start_time = time.perf_counter()
@@ -291,13 +266,8 @@ def main():
 
         # Clean up tmp ncRNA region database, if set
         if cfg.tmp_db_path:
-            print('remove ncRNA region database from tmp db directory...')
-            start_time = time.perf_counter()
             for file in Path(cfg.tmp_db_path).iterdir():
                 file.unlink()
-            end_time = time.perf_counter()
-            time_min = (end_time - start_time) / 60
-            print(f'\ttime: {time_min:.2f} min')
 
     ############################################################################
     # CRISPR prediction
@@ -348,34 +318,44 @@ def main():
             log.debug('detect spurious CDS')
             start_time = time.perf_counter()
             discarded_cdss = orf.detect_spurious(cdss)
+            cdss = [cds for cds in cdss if 'discarded' not in cds]
             end_time = time.perf_counter()
             time_min = (end_time - start_time) / 60
             print(f'\tdiscarded spurious: {len(discarded_cdss)} in {time_min:.2f} min')
-            cdss = [cds for cds in cdss if 'discarded' not in cds]
         
         if(len(cdss) > 0):
             log.debug('revise translational exceptions')
             start_time = time.perf_counter()
             no_revised = feat_cds.revise_translational_exceptions(genome, cdss)
+            cdss = [cds for cds in cdss if 'discarded' not in cds]
             end_time = time.perf_counter()
             time_min = (end_time - start_time) / 60
             print(f'\trevised translational exceptions: {no_revised} in {time_min:.2f} min')
-            cdss = [cds for cds in cdss if 'discarded' not in cds]
         
         if(cfg.regions):
             log.debug('import user-provided CDS regions')
             start_time = time.perf_counter()
             imported_cdss = feat_cds.import_user_cdss(genome, cfg.regions)
+            cdss.extend(imported_cdss)
             end_time = time.perf_counter()
             time_min = (end_time - start_time) / 60
             print(f'\timported CDS regions: {len(imported_cdss)} in {time_min:.2f} min')
-            cdss.extend(imported_cdss)
 
         if(len(cdss) > 0):
             log.debug('lookup CDS UPS/IPS')
             start_time = time.perf_counter()
+
+            # Copy `bakta.db` here, if tmp_db_path is set
+            if cfg.tmp_db_path:
+                bu.rsync_copy(f'{cfg.db_path}/bakta.db', cfg.tmp_db_path)
+
             cdss_ups, cdss_not_found = ups.lookup(cdss)
             cdss_ips, sorf_pscs = ips.lookup(cdss_ups)
+
+            # Immediately clean up the tmp db, if set to maximize space
+            if cfg.tmp_db_path:
+                Path(cfg.tmp_db_path.joinpath('bakta.db')).unlink()
+
             cdss_not_found.extend(sorf_pscs)
             end_time = time.perf_counter()
             time_min = (end_time - start_time) / 60
@@ -401,8 +381,18 @@ def main():
             print('\tlookup annotations...')
             start_time = time.perf_counter()
             log.debug('lookup CDS PSCs')
+
+            # Copy `bakta.db` here, if tmp_db_path is set
+            if cfg.tmp_db_path:
+                bu.rsync_copy(f'{cfg.db_path}/bakta.db', cfg.tmp_db_path)
+
             psc.lookup(cdss)  # lookup PSC info
             pscc.lookup(cdss)  # lookup PSCC info
+
+            # Immediately clean up the tmp db, if set to maximize space
+            if cfg.tmp_db_path:
+                Path(cfg.tmp_db_path.joinpath('bakta.db')).unlink()
+
             end_time = time.perf_counter()
             time_min = (end_time - start_time) / 60
             print(f'\ttime: {time_min:.2f} min')
@@ -425,13 +415,8 @@ def main():
 
             # If tmp db dir is set, copy dimanod db to tmp db dir
             if cfg.tmp_db_path:
-                print('copy expert protein sequences diamond db to tmp db directory...')
-                start_time = time.perf_counter()
                 bu.rsync_copy(f'{cfg.db_path}/expert-protein-sequences.dmnd', cfg.tmp_db_path)
                 diamond_db_path = cfg.tmp_db_path.joinpath('expert-protein-sequences.dmnd')
-                end_time = time.perf_counter()
-                time_min = (end_time - start_time) / 60
-                print(f'\ttime: {time_min:.2f} min')
             else:
                 diamond_db_path = cfg.db_path.joinpath('expert-protein-sequences.dmnd')
 
@@ -443,12 +428,7 @@ def main():
 
             # Cleanup tmp diamond db
             if cfg.tmp_db_path:
-                print('remove expert protein sequences diamond db from tmp db directory...')
-                start_time = time.perf_counter()
                 diamond_db_path.unlink()
-                end_time = time.perf_counter()
-                time_min = (end_time - start_time) / 60
-                print(f'\ttime: {time_min:.2f} min')
 
             if(cfg.user_proteins):
                 log.debug('conduct expert system: user aa seqs')
@@ -488,8 +468,18 @@ def main():
 
                 start_time = time.perf_counter()
                 pseudogenes = feat_cds.detect_pseudogenes(pseudo_candidates, cdss, genome) if len(pseudo_candidates) > 0 else []
+
+                # Copy `bakta.db` here, if tmp_db_path is set
+                if cfg.tmp_db_path:
+                    bu.rsync_copy(f'{cfg.db_path}/bakta.db', cfg.tmp_db_path)
+
                 psc.lookup(pseudogenes, pseudo=True)
                 pscc.lookup(pseudogenes, pseudo=True)
+
+                # Immediately clean up the tmp db, if set to maximize space
+                if cfg.tmp_db_path:
+                    Path(cfg.tmp_db_path.joinpath('bakta.db')).unlink()
+
                 for pseudogene in pseudogenes:
                     anno.combine_annotation(pseudogene)
                 end_time = time.perf_counter()
@@ -510,7 +500,7 @@ def main():
                 feat_cds.analyze_proteins(hypotheticals)
                 end_time = time.perf_counter()
                 time_min = (end_time - start_time) / 60
-                print('\tcalculated proteins statistics in {time_min:.2f} min')
+                print(f'\tcalculated proteins statistics in {time_min:.2f} min')
             
             print('\trevise special cases...')
             start_time = time.perf_counter()
@@ -558,8 +548,18 @@ def main():
 
         log.debug('lookup sORF UPS/IPS')
         start_time = time.perf_counter()
+
+        # Copy `bakta.db` here, if tmp_db_path is set
+        if cfg.tmp_db_path:
+            bu.rsync_copy(f'{cfg.db_path}/bakta.db', cfg.tmp_db_path)
+
         sorf_upss, sorfs_not_found = ups.lookup(sorfs)
         sorf_ipss, tmp = ips.lookup(sorf_upss)
+
+        # Immediately clean up the tmp db, if set to maximize space
+        if cfg.tmp_db_path:
+            Path(cfg.tmp_db_path.joinpath('bakta.db')).unlink()
+
         sorfs_not_found.extend(tmp)
         end_time = time.perf_counter()
         time_min = (end_time - start_time) / 60
@@ -585,6 +585,11 @@ def main():
                 print(f'\tfound PSCCs: {len(sorf_pscs_psccs)} in {time_min:.2f} min')
 
         print("\tlookup annotations...")
+
+        # Copy `bakta.db` here, if tmp_db_path is set
+        if cfg.tmp_db_path:
+            bu.rsync_copy(f'{cfg.db_path}/bakta.db', cfg.tmp_db_path)
+
         log.debug('lookup sORF PSCs')
         start_time = time.perf_counter()
         sorf_pscs_psccs.extend(sorf_ipss)
@@ -599,6 +604,10 @@ def main():
         end_time = time.perf_counter()
         time_min = (end_time - start_time) / 60
         print(f'\tlooked up PSCCs in {time_min:.2f} min')
+
+        # Immediately clean up the tmp db, if set to maximize space
+        if cfg.tmp_db_path:
+            Path(cfg.tmp_db_path.joinpath('bakta.db')).unlink()
 
         print('\tfilter and combine annotations...')
         log.debug('filter sORF by annotations')
