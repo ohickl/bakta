@@ -120,7 +120,7 @@ def create_cdss(genes, contig):
         else:
             cdss_per_sequence.append(cds)
         
-        # In meta mode, let pyrodigal use the translation table the gene was predictrd with
+        # In meta mode, let pyrodigal use the translation table the gene was predicted with
         if cfg.meta:
             aa = gene.translate(translation_table=None).upper().rstrip('*')  # always discard trailing asterisk
         else:
