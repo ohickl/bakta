@@ -224,7 +224,7 @@ def predict_crispr(genome: dict, chunk_paths: Path):
                                 crispr_array['spacers'].append(crispr_spacer)
                                 spacer_genome_seq = bu.extract_feature_sequence(crispr_spacer, contigs[contig_id])
                                 log.debug('spacer: array-id=%s, start=%i, stop=%i, genome-seq=%s, spacer-seq=%s', array_id, crispr_spacer['start'], crispr_spacer['stop'], spacer_genome_seq, spacer_seq)
-                                assert spacer_seq == spacer_genome_seq  # assure PILER-CR provided sequence equals sequence extracted from genome
+                                assert spacer_seq == spacer_genome_seq, f'spacer_seq: {spacer_seq}\nspacer_genome_seq: {spacer_genome_seq}'  # assure PILER-CR provided sequence equals sequence extracted from genome
                 elif(output_section == 'POSITION'):
                     if(line[0] == '>'):
                         contig_id = line[1:]
