@@ -42,14 +42,13 @@ AMINO_ACID_DICT = {
     'sec': ('U', so.SO_TRNA_SELCYS)
 }
 
-
-def run_trnascan_on_chunk(chunk_path: Path, txt_output_path: Path, fasta_output_path: Path, env: dict):
+def run_trnascan_on_chunk(chunk_path: Path, txt_output_path: Path, fasta_output_path: Path, env: dict, threads: int = 1):
     cmd = [
         'tRNAscan-SE',
         '-G',
         '--output', str(txt_output_path),
         '--fasta', str(fasta_output_path),
-        '--thread', "1",
+        '--thread', str(threads),
         str(chunk_path)
     ]
     log.debug('cmd=%s', cmd)
@@ -77,10 +76,14 @@ def predict_t_rnas(genome: dict, chunk_paths: Path):
     chunk_txt_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tsv') for i in range(len(chunk_paths))]
     chunk_fasta_output_paths = [chunk_dir.joinpath(f'chunk_{i}.fasta') for i in range(len(chunk_paths))]
 
+    # Use at max 8 threads for tRNAscan-SE, divide chunks by threads to get the number of parallel chunks to process
+    trnascan_threads = min(cfg.threads, 8)
+    parallel_chunks = len(chunk_paths) // trnascan_threads
+
     # Submit tasks to the executor
-    with concurrent.futures.ProcessPoolExecutor(max_workers=cfg.threads) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=parallel_chunks) as executor:
         futures = [
-            executor.submit(run_trnascan_on_chunk, chunk_path, chunk_txt_output_path, chunk_fasta_output_path, cfg.env)
+            executor.submit(run_trnascan_on_chunk, chunk_path, chunk_txt_output_path, chunk_fasta_output_path, cfg.env, trnascan_threads)
             for chunk_path, chunk_txt_output_path, chunk_fasta_output_path in zip(chunk_paths, chunk_txt_output_paths, chunk_fasta_output_paths)
         ]
 
