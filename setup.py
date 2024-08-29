@@ -31,8 +31,8 @@ setup(
         'requests >= 2.25.1',
         'alive-progress >= 3.0.1',
         'PyYAML >= 6.0',
-        'pyrodigal >= 3.0.1',
-        'pyhmmer >= 0.10.0'
+        'pyrodigal >= 3.1.0',
+        'pyhmmer >= 0.10.4'
     ],
     entry_points={
         'console_scripts': [
