@@ -150,7 +150,14 @@ def main():
 
     # Split assembly into chuncks for parallel processing
     print(f'split assembly into {cfg.threads} chunks...')
-    fasta_chunk_dir = cfg.tmp_path.joinpath('assembly_chunks')
+
+    # Change fasta chunks path for more speed tmp_db_path is set
+    if cfg.tmp_db_path:
+        assembly_chunks_parent = cfg.tmp_db_path
+    else:
+        assembly_chunks_parent = cfg.tmp_path
+
+    fasta_chunk_dir = assembly_chunks_parent.joinpath('assembly_chunks')
     fasta_chunk_dir.mkdir(parents=True, exist_ok=True)
 
     # Split the fasta file
