@@ -20,7 +20,6 @@ log = logging.getLogger(__name__)
 def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_value: float, env: dict):
     """
     Runs cmscan on a single chunk of sequences.
-    (This function is from your original script and remains mostly unchanged.)
     """
     cmd = [
         'cmscan',
@@ -55,7 +54,6 @@ def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_va
 def determine_class(description: str) -> so.SO:
     """
     Determines the Sequence Ontology class based on the ncRNA description.
-    (This function is from your original script and remains unchanged.)
     """
     description = description.lower()
     if 'leader' in description:
@@ -77,13 +75,11 @@ def determine_class(description: str) -> so.SO:
 def predict_nc_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[Dict]:
     """
     Search for non-coding RNA regions using a parallelized, chunk-based approach.
-    Adapted to the new main schema.
     """
     final_output_path = cfg.tmp_path.joinpath('ncrna-regions.tsv')
     chunk_output_dir = cfg.tmp_path.joinpath('ncrna_chunks_out')
     chunk_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ADAPTED: Calculate the -Z parameter from the 'data' dictionary
     z_value = (2 * data['stats']['size'] // 1000000) if data['stats']['size'] >= 1000000 else 0
 
     chunk_output_paths = [chunk_output_dir.joinpath(f'{chunk_path.name}.tblout') for chunk_path in fasta_chunk_paths]
@@ -143,7 +139,7 @@ def predict_nc_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List
                     rfam2go[rfam] = [go]
 
     ncrnas = []
-    # ADAPTED: Use the 'data' dictionary as required by the new schema
+
     sequences = {s['id']: s for s in data['sequences']}
     with final_output_path.open() as fh:
         for line in fh:

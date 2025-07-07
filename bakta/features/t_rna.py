@@ -7,7 +7,6 @@ from typing import Dict, List, Any
 
 from Bio import SeqIO
 
-# Assuming these modules are available in the project structure
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.so as so
@@ -46,11 +45,10 @@ AMINO_ACID_DICT = {
 def run_trnascan_on_chunk(chunk_path: Path, txt_output_path: Path, fasta_output_path: Path, env: dict, threads: int = 1):
     """
     Runs tRNAscan-SE on a single chunk of sequences.
-    (This function is from your original script and remains mostly unchanged.)
     """
     cmd = [
         'tRNAscan-SE',
-        '-B',  # Use bacterial model, as in the new main branch script
+        '-G',
         '--output', str(txt_output_path),
         '--fasta', str(fasta_output_path),
         '--thread', str(threads),
@@ -73,7 +71,6 @@ def run_trnascan_on_chunk(chunk_path: Path, txt_output_path: Path, fasta_output_
 def predict_t_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[Dict]:
     """
     Search for tRNA genes using a parallelized, chunk-based approach.
-    Adapted to the new main schema.
     """
     final_txt_output_path = cfg.tmp_path.joinpath('trna.tsv')
     final_fasta_output_path = cfg.tmp_path.joinpath('trna.fasta')
@@ -127,7 +124,7 @@ def predict_t_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[
     log.info('tRNA prediction completed successfully.')
 
     trnas = {}
-    # ADAPTED: Use the 'data' dictionary as required by the new schema
+    
     sequences = {s['id']: s for s in data['sequences']}
     with final_txt_output_path.open() as fh:
         for line in fh.readlines()[3:]:

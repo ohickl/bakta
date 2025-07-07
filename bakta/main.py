@@ -187,38 +187,6 @@ def main():
     contig_fasta_ext = sequences_path.suffix
     fasta_chunk_paths = sorted(fasta_chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
 
-
-    # Split assembly into chuncks for parallel processing
-    print(f'split assembly into {cfg.threads} chunks...')
-
-    # Change fasta chunks path for more speed tmp_db_path is set
-    if cfg.tmp_db_path:
-        assembly_chunks_parent = cfg.tmp_db_path
-    else:
-        assembly_chunks_parent = cfg.tmp_path
-
-    fasta_chunk_dir = assembly_chunks_parent.joinpath('assembly_chunks')
-    fasta_chunk_dir.mkdir(parents=True, exist_ok=True)
-
-    # Split the fasta file
-    print(f'\tsplitting assembly into {cfg.threads} chunks...')
-    start_time = time.perf_counter()
-    split_cmd = [
-        'seqkit', 'split',
-        '--quiet',
-        '-p', str(cfg.threads),
-        '-O', str(fasta_chunk_dir),
-        str(sequences_path)
-    ]
-    sp.run(split_cmd, check=True)
-    end_time = time.perf_counter()
-    time_min = (end_time - start_time) / 60
-    print(f'\ttime: {time_min:.2f} min')
-
-    # Determine the extension of the input fasta file and generate sorted chunk paths
-    contig_fasta_ext = sequences_path.suffix
-    fasta_chunk_paths = sorted(fasta_chunk_dir.glob(f'*{contig_fasta_ext}'))  # Ensure the chunk paths are ordered
-
     ############################################################################
     # tRNA prediction
     ############################################################################

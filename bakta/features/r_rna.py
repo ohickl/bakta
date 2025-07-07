@@ -5,7 +5,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Any
 
-# Assuming these modules are available in the project structure
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.so as so
@@ -22,7 +21,6 @@ log = logging.getLogger(__name__)
 def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_value: float, env: dict):
     """
     Runs cmscan on a single chunk of sequences for rRNA prediction.
-    (This function is from your original script and remains mostly unchanged.)
     """
     cmd = [
         'cmscan',
@@ -57,13 +55,11 @@ def run_cmscan_on_chunk(chunk_path: Path, output_path: Path, db_path: Path, z_va
 def predict_r_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[Dict]:
     """
     Search for ribosomal RNA genes using a parallelized, chunk-based approach.
-    Adapted to the new main schema.
     """
     final_output_path = cfg.tmp_path.joinpath('rrna.tsv')
     chunk_output_dir = cfg.tmp_path.joinpath('rrna_chunks_out')
     chunk_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ADAPTED: Calculate the -Z parameter from the 'data' dictionary
     z_value = (2 * data['stats']['size'] // 1000000) if data['stats']['size'] >= 1000000 else 0
 
     # Use tmp db path, if supplied
@@ -110,7 +106,7 @@ def predict_r_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[
     log.info('rRNA prediction completed successfully.')
 
     rrnas = []
-    # ADAPTED: Use the 'data' dictionary as required by the new schema
+    
     sequences = {s['id']: s for s in data['sequences']}
     with final_output_path.open() as fh:
         for line in fh:

@@ -5,7 +5,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Any
 
-# Assuming these modules are available in the project structure
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.so as so
@@ -18,7 +17,6 @@ log = logging.getLogger(__name__)
 def run_aragorn_on_chunk(chunk_path: Path, txt_output_path: Path, translation_table: int, complete: bool, env: dict):
     """
     Runs aragorn on a single chunk of sequences to find tmRNAs.
-    (This function is from your original script and remains mostly unchanged.)
     """
     cmd = [
         'aragorn',
@@ -50,7 +48,6 @@ def run_aragorn_on_chunk(chunk_path: Path, txt_output_path: Path, translation_ta
 def predict_tm_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[Dict]:
     """
     Search for tmRNA genes using a parallelized, chunk-based approach.
-    Adapted to the new main schema.
     """
     final_txt_output_path = cfg.tmp_path.joinpath('tmrna.tsv')
     chunk_output_dir = cfg.tmp_path.joinpath('tmrna_chunks_out')
@@ -58,7 +55,6 @@ def predict_tm_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List
 
     chunk_txt_paths = [chunk_output_dir.joinpath(f'{p.name}.tsv') for p in fasta_chunk_paths]
 
-    # ADAPTED: Get translation_table and complete status from the 'data' dictionary
     translation_table = data['genome']['translation_table']
     is_complete = data['genome']['complete']
 
@@ -111,7 +107,7 @@ def predict_tm_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List
     log.info('tmRNA prediction completed successfully.')
 
     tmrnas = []
-    # ADAPTED: Use the 'data' dictionary as required by the new schema
+    
     sequences = {s['id']: s for s in data['sequences']}
     with final_txt_output_path.open() as fh:
         sequence_id = None

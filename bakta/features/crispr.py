@@ -6,13 +6,11 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Any
 
-# Assuming these modules are available in the project structure
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.so as so
 import bakta.utils as bu
 
-# Regex from your original modded script
 RE_CRISPR = re.compile(r'(\d{1,8})\s+(\d{2})\s+(\d{1,3}\.\d)\s+(?:(\d{1,2})\s+)?([ATGCN]+)?\s+([ATGCN\.-]+)\s*(?:([ATGCN]+))?')
 
 log = logging.getLogger(__name__)
@@ -22,7 +20,6 @@ def run_pilercr_on_chunk(chunk_path: Path, output_path: Path, env: dict, is_retr
     """
     Runs PILER-CR on a single chunk of sequences. Includes a retry mechanism
     that splits the chunk into smaller pieces if the initial run fails.
-    (This function is from your original script and remains unchanged.)
     """
     try:
         cmd = [
@@ -89,7 +86,6 @@ def concatenate_pilercr_outputs(chunk_output_paths: list, final_output_path: Pat
     """
     Concatenates PILER-CR outputs from multiple chunks into a single, correctly
     formatted output file, re-numbering array IDs to be unique.
-    (This function is from your original script and remains unchanged.)
     """
     header = []
     detail_reports, similarity_summaries, position_summaries = [], [], []
@@ -174,7 +170,6 @@ def concatenate_pilercr_outputs(chunk_output_paths: list, final_output_path: Pat
 def predict_crispr(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[Dict]:
     """
     Predict CRISPR arrays with PILER-CR using a chunking approach.
-    Adapted to the new main schema.
     """
     final_output_path = cfg.tmp_path.joinpath('crispr.txt')
     # Create a dedicated directory for pilercr outputs to avoid name clashes
@@ -212,7 +207,7 @@ def predict_crispr(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[
 
     # Parse crispr arrays
     crispr_arrays = {}
-    # ADAPTED: Use the 'data' dictionary as required by the new schema
+    
     sequences = {s['id']: s for s in data['sequences']}
     
     with final_output_path.open() as fh:
@@ -245,9 +240,7 @@ def predict_crispr(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[
                         ])
                         crispr_arrays[array_id] = crispr_array
                     elif line.startswith('>'):
-                        # ADAPTED: variable name changed for clarity
                         sequence_id = line[1:]
-                        # ADAPTED: key changed from 'contig' to 'sequence'
                         crispr_array['sequence'] = sequence_id
                     elif not line.startswith('='):
                         m = RE_CRISPR.fullmatch(line)
@@ -270,7 +263,6 @@ def predict_crispr(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[
                                 crispr_spacer['stop'] = position + repeat_length + spacer_length - 1 - gap_count
                                 crispr_spacer['sequence'] = spacer_seq
                                 crispr_array['spacers'].append(crispr_spacer)
-                                # ADAPTED: Use 'sequences' dict and 'sequence_id'
                                 spacer_genome_seq = bu.extract_feature_sequence(crispr_spacer, sequences[sequence_id])
                                 assert spacer_seq == spacer_genome_seq, f'spacer_seq: {spacer_seq}\nspacer_genome_seq: {spacer_genome_seq}'
 
@@ -295,7 +287,6 @@ def predict_crispr(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[
                         crispr_array['repeat_consensus'] = repeat_consensus
                         crispr_array['db_xrefs'] = [so.SO_CRISPR.id]
 
-                        # ADAPTED: Use 'sequences' dict and 'sequence_id'
                         nt = bu.extract_feature_sequence(crispr_array, sequences[sequence_id])
                         crispr_array['nt'] = nt
                         log.info(
