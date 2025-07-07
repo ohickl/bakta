@@ -1,7 +1,7 @@
 import logging
 import re
 
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Sequence, Tuple
 
@@ -9,48 +9,48 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqFeature import SeqFeature, FeatureLocation, CompoundLocation, AfterPosition, BeforePosition
 
-import bakta
 import bakta.config as cfg
 import bakta.constants as bc
+import bakta.features.annotation as ba
 import bakta.so as so
 
 
 log = logging.getLogger('INSDC')
 
 
-def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Path, embl_output_path: Path):
-    log.debug('prepare: genbank=%s, embl=%s', genbank_output_path, embl_output_path)
-
-    contig_list = []
-    for contig in genome['contigs']:
-        contig_features = [feat for feat in features if feat['contig'] == contig['id']]
+def build_biopython_sequence_list(data: dict, features: Sequence[dict]):
+    sequence_list = []
+    for seq in data['sequences']:
+        sequence_features = []
+        if len(features) > 0:
+            sequence_features = [feat for feat in features if feat['sequence'] == seq['id']] if 'sequence' in features[0] else [feat for feat in features if feat['contig'] == seq['id']]  # <1.10.0 compatibility
         comment = (
             'Annotated with Bakta',
-            f"Software: v{bakta.__version__}\n",
+            f"Software: v{cfg.version}\n",
             f"Database: v{cfg.db_info['major']}.{cfg.db_info['minor']}, {cfg.db_info['type']}\n",
             f'DOI: {bc.BAKTA_DOI}\n',
             f'URL: {bc.BAKTA_URL}\n',
             '\n',
             '##Genome Annotation Summary:##\n',
-            f"{'Annotation Date':<30} :: {datetime.now().strftime('%m/%d/%Y, %H:%M:%S')}\n",
-            f"{'CDSs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_CDS or feat['type'] == bc.FEATURE_SORF]):5,}\n",
-            f"{'tRNAs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_T_RNA]):5,}\n",
-            f"{'tmRNAs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_TM_RNA]):5,}\n",
-            f"{'rRNAs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_R_RNA]):5,}\n",
-            f"{'ncRNAs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_NC_RNA]):5,}\n",
-            f"{'regulatory ncRNAs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_NC_RNA_REGION]):5,}\n",
-            f"{'CRISPR Arrays':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_CRISPR]):5,}",
-            f"{'oriCs/oriVs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_ORIC or feat['type'] == bc.FEATURE_ORIV]):5,}",
-            f"{'oriTs':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_ORIT]):5,}",
-            f"{'gaps':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_GAP]):5,}",
-            f"{'pseudogenes':<30} :: {len([feat for feat in contig_features if feat['type'] == bc.FEATURE_CDS and bc.PSEUDOGENE in feat]):5,}\n"
+            f"{'Annotation Date':<30} :: {cfg.run_end.strftime('%m/%d/%Y, %H:%M:%S')}\n",
+            f"{'CDSs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_CDS or feat['type'] == bc.FEATURE_SORF]):5,}\n",
+            f"{'tRNAs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_T_RNA]):5,}\n",
+            f"{'tmRNAs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_TM_RNA]):5,}\n",
+            f"{'rRNAs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_R_RNA]):5,}\n",
+            f"{'ncRNAs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_NC_RNA]):5,}\n",
+            f"{'regulatory ncRNAs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_NC_RNA_REGION]):5,}\n",
+            f"{'CRISPR Arrays':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_CRISPR]):5,}",
+            f"{'oriCs/oriVs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_ORIC or feat['type'] == bc.FEATURE_ORIV]):5,}",
+            f"{'oriTs':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_ORIT]):5,}",
+            f"{'gaps':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_GAP]):5,}",
+            f"{'pseudogenes':<30} :: {len([feat for feat in sequence_features if feat['type'] == bc.FEATURE_CDS and bc.PSEUDOGENE in feat]):5,}\n"
         )
-        contig_annotations = {
+        sequence_annotations = {
             'molecule_type': 'DNA',
-            'source': genome['taxon'],
-            'date': date.today().strftime('%d-%b-%Y').upper(),
-            'topology': contig['topology'],
-            'data_file_division': 'HGT' if contig['type'] == bc.REPLICON_CONTIG else 'BCT',
+            'source': data['genome'].get('taxon', ''),
+            'date': cfg.run_end.strftime('%d-%b-%Y').upper(),
+            'topology': seq['topology'],
+            'data_file_division': 'HGT' if seq['type'] == bc.REPLICON_CONTIG else 'BCT',
             # 'accession': '*',  # hold back until EMBL output bug is fixed in BioPython (https://github.com/biopython/biopython/pull/3572)
             'comment': comment
             # TODO: taxonomy
@@ -61,33 +61,34 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
         }
 
         description = ''
-        if(genome['taxon']):
-            contig_annotations['organism'] = genome['taxon']
-            source_qualifiers['organism'] = genome['taxon']
-            description = genome['taxon']
-        if(genome['strain']):
-            source_qualifiers['strain'] = genome['strain']
+        if(data['genome'].get('taxon', None)):
+            sequence_annotations['organism'] = data['genome']['taxon']
+            source_qualifiers['organism'] = data['genome']['taxon']
+            description = data['genome']['taxon']
+        if(data['genome']['strain']):
+            source_qualifiers['strain'] = data['genome']['strain']
 
-        if(contig['type'] == bc.REPLICON_PLASMID):
-            source_qualifiers['plasmid'] = contig['name'] if contig.get('name', None) else 'unnamed'
-            description = f"{description} plasmid {contig.get('name', 'unnamed')}"
-            description += ', complete sequence' if contig['complete'] else ', whole genome shotgun sequence'
-        elif(contig['type'] == bc.REPLICON_CHROMOSOME):
-            if contig.get('name', None):
-                source_qualifiers['chromosome'] = contig['name']
-            description = f'{description} chromosome, complete genome' if contig['complete'] else f"{description} chromosome {contig['id']}, whole genome shotgun sequence"
+        if(seq['type'] == bc.REPLICON_PLASMID):
+            source_qualifiers['plasmid'] = seq['name'] if seq.get('name', None) else 'unnamed'
+            description = f"{description} plasmid {seq.get('name', 'unnamed')}"
+            description += ', complete sequence' if seq['complete'] else ', whole genome shotgun sequence'
+        elif(seq['type'] == bc.REPLICON_CHROMOSOME):
+            if seq.get('name', None):
+                source_qualifiers['chromosome'] = seq['name']
+            description = f'{description} chromosome, complete genome' if seq['complete'] else f"{description} chromosome {seq['id']}, whole genome shotgun sequence"
         else:
-            description += f" {contig['id']}, whole genome shotgun sequence"
+            description += f" {seq['id']}, whole genome shotgun sequence"
 
         if(len(description) > 0 and description[0] == ' '):  # discard potential leading whitespace
             description = description[1:]
 
-        contig_rec = SeqIO.SeqRecord(id=contig['id'], name=contig['id'], description=description, annotations=contig_annotations, seq=Seq(contig['sequence']))
+        seq_bio = Seq(seq['nt']) if 'nt' in seq else Seq(seq['sequence'])  # <1.10.0 compatibility
+        sequence_record = SeqIO.SeqRecord(id=seq['id'], name=seq['id'], description=description, annotations=sequence_annotations, seq=seq_bio)
 
-        source = SeqFeature(FeatureLocation(0, contig['length'], strand=+1), type='source', qualifiers=source_qualifiers)
+        source = SeqFeature(FeatureLocation(0, seq['length'], strand=+1), type='source', qualifiers=source_qualifiers)
         seq_feature_list = [source]
 
-        for feature in contig_features:
+        for feature in sequence_features:
             insdc_feature_type = None
             qualifiers = {
                 'note': []
@@ -110,7 +111,7 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                 # TODO: Add fuzzy positions for oriC/oriV
                 insdc_feature_type = bc.INSDC_FEATURE_ORIGIN_REPLICATION
                 qualifiers['inference'] = 'similar to DNA sequence'
-                qualifiers['note'] = feature['product']
+                qualifiers['note'].append(feature['product'])
                 if('product' in qualifiers):
                     qualifiers['note'] = feature['product']
                     del qualifiers['product']
@@ -118,12 +119,13 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                 # TODO: Add fuzzy positions for oriT
                 insdc_feature_type = bc.INSDC_FEATURE_ORIGIN_TRANSFER
                 qualifiers['inference'] = 'similar to DNA sequence'
-                qualifiers['note'] = feature['product']
+                qualifiers['note'].append(feature['product'])
                 if('product' in qualifiers):
                     del qualifiers['product']
             elif(feature['type'] == bc.FEATURE_CDS) or (feature['type'] == bc.FEATURE_SORF):
-                if(feature.get('pseudo', False)):
+                if(bc.PSEUDOGENE in feature):
                     qualifiers[bc.INSDC_FEATURE_PSEUDOGENE] = bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNPROCESSED if feature[bc.PSEUDOGENE]['paralog'] else bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNITARY
+                    qualifiers['note'].append(feature[bc.PSEUDOGENE]['description'])
                 else:
                     qualifiers['protein_id'] = f"gnl|Bakta|{feature['locus']}"
                     qualifiers['translation'] = feature['aa']
@@ -137,7 +139,7 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                     else:
                         inference.append('ab initio prediction:Prodigal:2.6')
                 else:
-                    inference.append(f"ab initio prediction:Bakta:{'.'.join(bakta.__version__.split('.')[0:2])}")
+                    inference.append(f"ab initio prediction:Bakta:{'.'.join(cfg.version.split('.')[0:2])}")
                 if('ncbi_nrp_id' in feature.get('ups', {})):
                     nrp_id = feature['ups']['ncbi_nrp_id']
                     inference.append(f'similar to AA sequence:{bc.DB_XREF_REFSEQ_NRP}:{nrp_id}')
@@ -158,8 +160,6 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                     qualifiers['note'], ec_number = extract_ec_from_notes_insdc(qualifiers, 'note')
                     if(ec_number is not None):
                             qualifiers['EC_number'] = ec_number
-                if(feature.get('pseudo', False)):
-                    qualifiers['note'].append(feature[bc.PSEUDOGENE]['description'])
                 if('exception' in feature):
                     ex = feature['exception']
                     pos = f"{ex['start']}..{ex['stop']}"
@@ -182,13 +182,17 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                         anti_codon_pos = feature['anti_codon_pos']
                         qualifiers['anticodon'] = f"(pos:{anti_codon_pos[0]}..{anti_codon_pos[1]},aa:{feature['amino_acid']},seq:{feature['anti_codon']})"
                     else:
-                        qualifiers['note'] = f"tRNA-{feature['amino_acid']} ({feature['anti_codon']})"
+                        qualifiers['note'].append(f"tRNA-{feature['amino_acid']} ({feature['anti_codon']})")
                 qualifiers['inference'] = 'profile:tRNAscan:2.0'
                 insdc_feature_type = bc.INSDC_FEATURE_T_RNA
-                if('pseudo' in feature):
-                    qualifiers['pseudo'] = None
+                if(bc.PSEUDOGENE in feature):
+                    qualifiers[bc.INSDC_FEATURE_PSEUDOGENE] = bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNKNOWN
             elif(feature['type'] == bc.FEATURE_TM_RNA):
                 qualifiers['inference'] = 'profile:aragorn:1.2'
+                if('tag' in feature):
+                    qualifiers['tag_peptide'] = f"{feature['tag']['start']}..{feature['tag']['stop']}"
+                    if feature['strand'] == bc.STRAND_REVERSE:
+                        qualifiers['tag_peptide'] = f"complement({qualifiers['tag_peptide']})"
                 insdc_feature_type = bc.INSDC_FEATURE_TM_RNA
             elif(feature['type'] == bc.FEATURE_R_RNA):
                 for rfam_id in [dbxref.split(':')[1] for dbxref in feature['db_xrefs'] if dbxref.split(':')[0] == bc.DB_XREF_RFAM]:
@@ -204,7 +208,7 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                     qualifiers['inference'] = f'profile:Rfam:{rfam_id}'
                 qualifiers[bc.INSDC_FEATURE_REGULATORY_CLASS] = select_regulatory_class(feature)
                 insdc_feature_type = bc.INSDC_FEATURE_REGULATORY
-                qualifiers['note'] = feature['product']
+                qualifiers['note'].append(feature['product'])
                 qualifiers.pop('product', None)
             elif(feature['type'] == bc.FEATURE_CRISPR):
                 qualifiers[bc.INSDC_FEATURE_REPEAT_FAMILY] = 'CRISPR'
@@ -212,7 +216,7 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                 qualifiers[bc.INSDC_FEATURE_REPEAT_UNIT_SEQ] = feature['repeat_consensus']
                 qualifiers['inference'] = 'COORDINATES:alignment:pilercr:1.02'
                 insdc_feature_type = bc.INSDC_FEATURE_REPEAT_REGION
-                qualifiers['note'] = feature['product']
+                qualifiers['note'].append(feature['product'])
                 qualifiers.pop('product', None)
 
             strand = None
@@ -226,7 +230,7 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
             start = feature['start'] - 1
             stop = feature['stop']
             if('edge' in feature):
-                fl_1 = FeatureLocation(start, contig['length'], strand=strand)
+                fl_1 = FeatureLocation(start, seq['length'], strand=strand)
                 fl_2 = FeatureLocation(0, stop, strand=strand)
                 if(feature['strand'] == bc.STRAND_REVERSE):
                     feature_location = CompoundLocation([fl_2, fl_1])
@@ -234,17 +238,22 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                     feature_location = CompoundLocation([fl_1, fl_2])
             else:
                 if('truncated' in feature):
+                    if(bc.PSEUDOGENE not in feature):  # only add /pseudo qualifier if /pseudogene is not already set
+                        qualifiers[bc.INSDC_FEATURE_PSEUDO] = None
                     if(feature['truncated'] == bc.FEATURE_END_5_PRIME):
+                        qualifiers['note'].append("(5' truncated)")
                         if(feature['strand'] == bc.STRAND_FORWARD):
                             start = BeforePosition(start)
                         else:
                             stop = AfterPosition(stop)
                     elif(feature['truncated'] == bc.FEATURE_END_3_PRIME):
+                        qualifiers['note'].append("(3' truncated)")
                         if(feature['strand'] == bc.STRAND_FORWARD):
                             stop = AfterPosition(stop)
                         else:
                             start = BeforePosition(start)
                     elif(feature['truncated'] == bc.FEATURE_END_BOTH):
+                        qualifiers['note'].append('(partial)')
                         start = BeforePosition(start)
                         stop = AfterPosition(stop)
                 feature_location = FeatureLocation(start, stop, strand=strand)
@@ -253,26 +262,43 @@ def write_insdc(genome: dict, features: Sequence[dict], genbank_output_path: Pat
                     'locus_tag': feature['locus']
                 }
                 if(feature.get('gene', None)):
-                    qualifiers['gene'] = feature['gene']
-                    gene_qualifier['gene'] = feature['gene']
-                if(feature.get(bc.PSEUDOGENE, None)):
-                    gene_qualifier[bc.INSDC_FEATURE_PSEUDOGENE] = bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNPROCESSED if feature[bc.PSEUDOGENE]['paralog'] else bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNITARY
+                    if(cfg.compliant):
+                        if(ba.RE_GENE_SYMBOL.fullmatch(feature['gene'])):  # discard non-standard gene symbols
+                            gene_qualifier['gene'] = feature['gene']
+                        else:
+                            qualifiers.pop('gene', None)
+                    else:
+                        qualifiers['gene'] = feature['gene']
+                        gene_qualifier['gene'] = feature['gene']
+                if(bc.PSEUDOGENE in feature):
+                    if(feature['type'] == bc.FEATURE_CDS):
+                        gene_qualifier[bc.INSDC_FEATURE_PSEUDOGENE] = bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNPROCESSED if feature[bc.PSEUDOGENE]['paralog'] else bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNITARY
+                    else:
+                        gene_qualifier[bc.INSDC_FEATURE_PSEUDOGENE] = bc.INSDC_FEATURE_PSEUDOGENE_TYPE_UNKNOWN
+                elif('truncated' in feature):
+                    gene_qualifier[bc.INSDC_FEATURE_PSEUDO] = None
                 gen_seqfeat = SeqFeature(feature_location, type='gene', qualifiers=gene_qualifier)
                 seq_feature_list.append(gen_seqfeat)
             feat_seqfeat = SeqFeature(feature_location, type=insdc_feature_type, qualifiers=qualifiers)
             seq_feature_list.append(feat_seqfeat)
             for acc_feature in accompanying_features:  # add accompanying features, e.g. signal peptides
                 seq_feature_list.append(acc_feature)
-        contig_rec.features = seq_feature_list
-        contig_list.append(contig_rec)
+        sequence_record.features = seq_feature_list
+        sequence_list.append(sequence_record)
+    return sequence_list
 
+
+def write_features(data: dict, features: Sequence[dict], genbank_output_path: Path, embl_output_path: Path):
+    log.debug('prepare: genbank=%s, embl=%s', genbank_output_path, embl_output_path)
+
+    sequence_list = build_biopython_sequence_list(data, features)
     with genbank_output_path.open('wt', encoding='utf-8') as fh:
         log.info('write GenBank: path=%s', genbank_output_path)
-        SeqIO.write(contig_list, fh, format='genbank')
+        SeqIO.write(sequence_list, fh, format='genbank')
 
     with embl_output_path.open('wt', encoding='utf-8') as fh:
         log.info('write EMBL: path=%s', embl_output_path)
-        SeqIO.write(contig_list, fh, format='embl')
+        SeqIO.write(sequence_list, fh, format='embl')
 
 
 def select_ncrna_class(feature: dict) -> str:

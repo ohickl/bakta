@@ -22,10 +22,10 @@ hints:
   SoftwareRequirement:
     packages:
       bakta:
-        version: [ "1.9.4" ]
+        version: [ "1.11.3" ]
         specs: ["https://github.com/oschwengers/bakta"]
   DockerRequirement:
-    dockerPull: oschwengers/bakta:v1.9.4
+    dockerPull: oschwengers/bakta:v1.11.3
 
 #baseCommand: []
 
@@ -79,11 +79,11 @@ inputs:
     id: prodigal_tf_file
     inputBinding: {prefix: --prodigal-tf}
     type: File?
-  - doc: Translation table 11/4 (default = 11)
+  - doc: Translation table 11/4/25 (default = 11)
     id: translation_table
     inputBinding: {prefix: --translation-table}
     type: int?
-  - doc: Gram type (default = ?)
+  - doc: Gram type +/-/? (default = ?)
     id: gram
     inputBinding: {prefix: --gram}
     type: string?
@@ -95,6 +95,10 @@ inputs:
     id: locus_tag
     inputBinding: {prefix: --locus-tag}
     type: string?
+  - doc: Locus tag increment 1/5/10 (default = 1)
+    id: locus_tag
+    inputBinding: {prefix: --locus-tag-increment}
+    type: int?
   - doc: Keep original contig headers
     id: keep_contig_headers
     inputBinding: {prefix: --keep-contig-headers}
@@ -114,6 +118,10 @@ inputs:
   - doc: Fasta file of trusted protein sequences for CDS annotation
     id: proteins
     inputBinding: {prefix: --proteins}
+    type: File?
+  - doc: HMM file of trusted hidden markov models in HMMER format for CDS annotation
+    id: hmms
+    inputBinding: {prefix: --hmms}
     type: File?
   - doc: Run in metagenome mode
     id: meta
@@ -163,6 +171,10 @@ inputs:
     id: skip_ori
     inputBinding: {prefix: --skip-ori}
     type: boolean?
+  - doc: Skip feature overlap filters
+    id: skip_filter
+    inputBinding: {prefix: --skip-filter}
+    type: boolean?
   - doc: Skip genome plotting
     id: skip_plot
     inputBinding: {prefix: --skip-plot}
@@ -208,6 +220,11 @@ outputs:
                 return inputs.fasta_file.basename.replace(/\.[^/.]+$/, '') + '.tsv';
               }
             }
+  - doc: Inference metrics (score, evalue, coverage, identity) for annotated accessions
+    id: inference_tsv
+    type: File
+    format: edam:format_3475
+    outputBinding: {glob: '*.inference.tsv'}
   - doc: Annotation summary as txt
     id: summary_txt
     type: File

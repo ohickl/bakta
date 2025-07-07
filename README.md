@@ -1,11 +1,16 @@
 [![DOI:10.1099/mgen.0.000685](https://zenodo.org/badge/DOI/10.1099/mgen.0.000685.svg)](https://doi.org/10.1099/mgen.0.000685)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4247252.svg)](https://doi.org/10.5281/zenodo.4247252)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-brightgreen.svg)](https://github.com/oschwengers/bakta/blob/master/LICENSE)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/bakta.svg)
 ![PyPI - Status](https://img.shields.io/pypi/status/bakta.svg)
 ![GitHub release](https://img.shields.io/github/release/oschwengers/bakta.svg)
+
 [![PyPI](https://img.shields.io/pypi/v/bakta.svg)](https://pypi.org/project/bakta)
-[![Conda](https://img.shields.io/conda/v/bioconda/bakta.svg)](https://bioconda.github.io/recipes/bakta/README.html)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4247252.svg)](https://doi.org/10.5281/zenodo.4247252)
+[![Conda](https://img.shields.io/conda/vn/bioconda/bakta.svg)](https://bioconda.github.io/recipes/bakta/README.html)
+[![Docker Image Version](https://img.shields.io/docker/v/oschwengers/bakta?sort=semver&label=docker)](https://hub.docker.com/r/oschwengers/bakta)
+[![Spack](https://img.shields.io/spack/v/py-bakta)](https://packages.spack.io/package.html?name=py-bakta)
+[![Galaxy Toolshed - Tool Version](https://img.shields.io/galaxytoolshed/v/bakta/iuc/bakta?label=usegalaxy.eu)](https://usegalaxy.eu/root?tool_id=bakta)
+[![Static Badge](https://img.shields.io/badge/bio.tools-v1.9.4-blue?link=https%3A%2F%2Fbio.tools%2Fbakta)](https://bio.tools/bakta)
 
 # Bakta: rapid & standardized annotation of bacterial genomes, MAGs & plasmids
 
@@ -41,7 +46,7 @@ Bakta exactly identifies known identical protein sequences (**IPS**) from RefSeq
 This AFSI approach substantially accellerates the annotation process by avoiding computationally expensive homology searches for identified genes. Thus, Bakta can annotate a typical bacterial genome in 10 &plusmn;5 min on a laptop, plasmids in a couple of seconds/minutes.
 
 - **Database cross-references**
-Fostering the [FAIR](https://www.go-fair.org/fair-principles) principles, Bakta exploits its AFSI approach to annotate CDS with database cross-references (**dbxref**) to RefSeq (`WP_*`), UniRef100 (`UniRef100_*`) and UniParc (`UPI*`). By doing so, IPS allow the surveillance of distinct gene alleles and streamlining comparative analysis as well as posterior (external) annotations of `putative` & `hypothetical` protein sequences which can be mapped back to existing CDS via these exact & stable identifiers (*E. coli* gene [ymiA](https://www.uniprot.org/uniprot/P0CB62) [...more](https://www.uniprot.org/help/dubious_sequences)). Currently, Bakta identifies ~214.8 mio, ~199 mio and ~161 mio distinct protein sequences from UniParc, UniRef100 and RefSeq, respectively. Hence, for certain genomes, up to 99 % of all CDS can be identified this way, skipping computationally expensive sequence alignments.
+Fostering the [FAIR](https://www.go-fair.org/fair-principles) principles, Bakta exploits its AFSI approach to annotate CDS with database cross-references (**dbxref**) to RefSeq (`WP_*`), UniRef100 (`UniRef100_*`) and UniParc (`UPI*`). By doing so, IPS allow the surveillance of distinct gene alleles and streamlining comparative analysis as well as posterior (external) annotations of `putative` & `hypothetical` protein sequences which can be mapped back to existing CDS via these exact & stable identifiers (*E. coli* gene [ymiA](https://www.uniprot.org/uniprot/P0CB62) [...more](https://www.uniprot.org/help/dubious_sequences)). Currently, Bakta identifies ~350 mio, ~330 mio and ~290 mio distinct protein sequences from UniParc, UniRef100 and RefSeq, respectively. Hence, for certain genomes, up to 99 % of all CDS can be identified this way, skipping computationally expensive sequence alignments.
 
 - **FAIR annotations**
 To provide standardized annotations adhearing to FAIR principles, Bakta utilizes a versioned custom annotation database comprising UniProt's [UniRef100 & UniRef90](https://www.uniprot.org/uniref/) protein clusters (FAIR -> [DOI](http://dx.doi.org/10.1038/s41597-019-0180-9)/[DOI](https://doi.org/10.1093/nar/gkaa1100)) enriched with dbxrefs (`GO`, `COG`, `EC`) and annotated by specialized niche databases. For each DB version we provide a comprehensive log file of all imported sequences and annotations.
@@ -107,16 +112,16 @@ python3 -m pip install --user bakta
 
 Bakta requires the following 3rd party software tools which must be installed and executable to use the full set of features:
 
-- tRNAscan-SE (2.0.8) <https://doi.org/10.1101/614032> <http://lowelab.ucsc.edu/tRNAscan-SE>
-- Aragorn (1.2.38) <http://dx.doi.org/10.1093/nar/gkh152> <http://130.235.244.92/ARAGORN>
+- tRNAscan-SE (2.0.11) <https://doi.org/10.1101/614032> <http://lowelab.ucsc.edu/tRNAscan-SE>
+- Aragorn (1.2.41) <http://dx.doi.org/10.1093/nar/gkh152> <http://130.235.244.92/ARAGORN>
 - INFERNAL (1.1.4) <https://dx.doi.org/10.1093%2Fbioinformatics%2Fbtt509> <http://eddylab.org/infernal>
 - PILER-CR (1.06) <https://doi.org/10.1186/1471-2105-8-18> <http://www.drive5.com/pilercr>
-- Pyrodigal (2.1.0) <https://doi.org/10.21105/joss.04296> <https://github.com/althonos/pyrodigal>
-- PyHMMER (0.10.0) <https://doi.org/10.21105/joss.04296> <https://github.com/althonos/pyhmmer>
-- Diamond (2.0.14) <https://doi.org/10.1038/nmeth.3176> <https://github.com/bbuchfink/diamond>
-- Blast+ (2.12.0) <https://www.ncbi.nlm.nih.gov/pubmed/2231712> <https://blast.ncbi.nlm.nih.gov>
-- AMRFinderPlus (3.10.23) <https://github.com/ncbi/amr>
-- DeepSig (1.2.5) <https://doi.org/10.1093/bioinformatics/btx818>
+- Pyrodigal (3.5.0) <https://doi.org/10.21105/joss.04296> <https://github.com/althonos/pyrodigal>
+- PyHMMER (0.10.15) <https://doi.org/10.21105/joss.04296> <https://github.com/althonos/pyhmmer>
+- Diamond (2.1.10) <https://doi.org/10.1038/nmeth.3176> <https://github.com/bbuchfink/diamond>
+- Blast+ (2.14.0) <https://www.ncbi.nlm.nih.gov/pubmed/2231712> <https://blast.ncbi.nlm.nih.gov>
+- AMRFinderPlus (4.0.3) <https://github.com/ncbi/amr>
+- pyCirclize (1.7.0) https://github.com/moshi4/pyCirclize
 
 ### Database download
 
@@ -136,12 +141,11 @@ To download the most recent compatible database version we recommend to use the 
 bakta_db download --output <output-path> --type [light|full]
 ```
 
-Of course, the database can also be downloaded manually:
+Of course, the database can also be downloaded and installed manually:
 
 ```bash
-wget https://zenodo.org/record/10522951/files/db-light.tar.gz
-tar -xzf db-light.tar.gz
-rm db-light.tar.gz
+wget https://zenodo.org/record/14916843/files/db-light.tar.xz
+bakta_db install -i db-light.tar.xz
 ```
 
 If required, or desired, the AMRFinderPlus DB can also be updated manually:
@@ -156,7 +160,7 @@ If you're using bakta on Docker:
 docker run -v /path/to/desired-db-path:/db --entrypoint /bin/bash oschwengers/bakta:latest -c "bakta_db download --output /db --type [light|full]"
 ```
 
-As an additional data repository backup, we provide the most recent database version via our institute servers: [full](https://jlubox.uni-giessen.de/getlink/fiKeyT1huWv9vW5cXKYkZXYB/db.tar.gz), [light](https://jlubox.uni-giessen.de/getlink/fiG6AHmHA94t4v2r2vwW91WB/db-light.tar.gz). However, the bandwith is limited. Hence, please use it with caution and only if Zenodo might be temporarily uncreachable or slow. In these cases, please also download the AMRFinderPlus database as indicated above.
+As an additional data repository backup, we provide the most recent database version via our institute servers: [full](https://s3.computational.bio.uni-giessen.de/bakta-db/db-v6.0.tar.xz), [light](https://s3.computational.bio.uni-giessen.de/bakta-db/db-light-v6.0.tar.xz). However, the bandwith is limited. Hence, please use it with caution and only if Zenodo might be temporarily unreachable or slow.
 
 Update an existing database:
 
@@ -240,8 +244,8 @@ original locus id  |  new locus id  |  type  |  topology  |  name
 NODE_1 | chrom | `chromosome` | `circular` | `-`
 NODE_2 | p1 | `plasmid` | `c` | `pXYZ1`
 NODE_3 | p2 | `p`  |  `c` | `pXYZ2`
-NODE_4 | special-contig-name-xyz |  `-` | -
-NODE_5 | `` |  `-` | -
+NODE_4 | special-contig-name-xyz |  `-` | `-` | `-`
+NODE_5 | `` |  `-` | `-` | `-`
 
 #### User-provided regions
 
@@ -274,6 +278,27 @@ dbxrefs | `<empty>`, `db:id`, `,` separated list  | `VFDB:VF0511`
 
 Protein sequences provided in short Fasta or GenBank format are searched with default thresholds of 90%, 80% and 80% for minimal identity, query and subject coverage, respectively.
 
+#### User-provided HMMs
+
+Bakta accepts user-provided trusted HMMs via `--hmms` in HMMER's text format. If set, Bakta will adhere to the *trusted cutoff* specified in the HMM header. In addition, a max. evalue threshold of 1e-6 is applied. By default, Bakta uses the HMM description line as a product description. Further information can be provided via the HMM description line using the *short* format as explained above in the [User-provided protein sequences](####user-provided-protein-sequences) section.
+
+```bash
+# default
+HMMER3/f [3.1b2 | February 2015]
+NAME  id
+ACC   id
+DESC  product
+LENG  435
+TC    600 600
+
+# short
+NAME  id
+ACC   id
+DESC  gene~~~product~~~dbxrefs
+LENG  435
+TC    600 600
+```
+
 ### Output
 
 Annotation results are provided in standard bioinformatics file formats:
@@ -285,12 +310,13 @@ Annotation results are provided in standard bioinformatics file formats:
 - `<prefix>.fna`: replicon/contig DNA sequences as FASTA
 - `<prefix>.ffn`: feature nucleotide sequences as FASTA
 - `<prefix>.faa`: CDS/sORF amino acid sequences as FASTA
+- `<prefix>.inference.tsv`: inference metrics (score, evalue, coverage, identity) for annotated accessions as TSV
 - `<prefix>.hypotheticals.tsv`: further information on hypothetical protein CDS as simple human readble tab separated values
 - `<prefix>.hypotheticals.faa`: hypothetical protein CDS amino acid sequences as FASTA
-- `<prefix>.json`: all (internal) annotation & sequence information as JSON
 - `<prefix>.txt`: summary as TXT
 - `<prefix>.png`: circular genome annotation plot as PNG
 - `<prefix>.svg`: circular genome annotation plot as SVG
+- `<prefix>.json`: all (internal) annotation & sequence information as JSON
 
 The `<prefix>` can be set via `--prefix <prefix>`. If no prefix is set, Bakta uses the input file prefix.
 
@@ -325,7 +351,7 @@ Of note, Bakta provides all detailed (internal) information on each annotated fe
         {
             "id": "c1",
             "description": "[organism=Escherichia coli] [completeness=complete] [topology=circular]",
-            "sequence": "AGCTTT...",
+            "nt": "AGCTTT...",
             "length": 5498578,
             "complete": true,
             "type": "chromosome",
@@ -337,17 +363,26 @@ Of note, Bakta provides all detailed (internal) information on each annotated fe
 }
 ```
 
+Bakta provides a helper function to create above mentioned output files from the (GNU-zipped) *JSON* result file, thus helping potential long-term or large-scale annotation projects to reduce overall storage requirements.
+
+```bash
+bakta_io --output <output-path> --prefix <prefix> result.json.gz
+
+bakta_io --help
+```
+
 Exemplary annotation result files for several genomes (mostly ESKAPE species) are hosted at Zenodo: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4770026.svg)](https://doi.org/10.5281/zenodo.4770026)
 
 ## Usage
 
 ```bash
-usage: bakta [--db DB] [--min-contig-length MIN_CONTIG_LENGTH] [--prefix PREFIX] [--output OUTPUT]
+usage: bakta [--db DB] [--min-contig-length MIN_CONTIG_LENGTH] [--prefix PREFIX] [--output OUTPUT] [--force]
              [--genus GENUS] [--species SPECIES] [--strain STRAIN] [--plasmid PLASMID]
-             [--complete] [--prodigal-tf PRODIGAL_TF] [--translation-table {11,4}] [--gram {+,-,?}] [--locus LOCUS]
-             [--locus-tag LOCUS_TAG] [--keep-contig-headers] [--replicons REPLICONS] [--compliant] [--replicons REPLICONS] [--regions REGIONS] [--proteins PROTEINS] [--meta]
+             [--complete] [--prodigal-tf PRODIGAL_TF] [--translation-table {11,4,25}] [--gram {+,-,?}]
+             [--locus LOCUS] [--locus-tag LOCUS_TAG] [--locus-tag-increment {1,5,10}] [--keep-contig-headers] [--compliant]
+             [--replicons REPLICONS] [--regions REGIONS] [--proteins PROTEINS] [--hmms HMMS] [--meta]
              [--skip-trna] [--skip-tmrna] [--skip-rrna] [--skip-ncrna] [--skip-ncrna-region]
-             [--skip-crispr] [--skip-cds] [--skip-pseudo] [--skip-sorf] [--skip-gap] [--skip-ori] [--skip-plot]
+             [--skip-crispr] [--skip-cds] [--skip-pseudo] [--skip-sorf] [--skip-gap] [--skip-ori] [--skip-filter] [--skip-plot]
              [--help] [--verbose] [--debug] [--threads THREADS] [--tmp-dir TMP_DIR] [--version]
              <genome>
 
@@ -359,7 +394,7 @@ positional arguments:
 Input / Output:
   --db DB, -d DB        Database path (default = <bakta_path>/db). Can also be provided as BAKTA_DB environment variable.
   --min-contig-length MIN_CONTIG_LENGTH, -m MIN_CONTIG_LENGTH
-                        Minimum contig size (default = 1; 200 in compliant mode)
+                        Minimum contig/sequence size (default = 1; 200 in compliant mode)
   --prefix PREFIX, -p PREFIX
                         Prefix for output files
   --output OUTPUT, -o OUTPUT
@@ -376,19 +411,23 @@ Annotation:
   --complete            All sequences are complete replicons (chromosome/plasmid[s])
   --prodigal-tf PRODIGAL_TF
                         Path to existing Prodigal training file to use for CDS prediction
-  --translation-table {11,4}
-                        Translation table: 11/4 (default = 11)
+  --translation-table {11,4,25}
+                        Translation table: 11/4/25 (default = 11)
   --gram {+,-,?}        Gram type for signal peptide predictions: +/-/? (default = ?)
   --locus LOCUS         Locus prefix (default = 'contig')
   --locus-tag LOCUS_TAG
                         Locus tag prefix (default = autogenerated)
+  --locus-tag-increment {1,5,10}
+                        Locus tag increment: 1/5/10 (default = 1)
+
   --keep-contig-headers
-                        Keep original contig headers
+                        Keep original contig/sequence headers
   --compliant           Force Genbank/ENA/DDJB compliance
   --replicons REPLICONS, -r REPLICONS
                         Replicon information table (tsv/csv)
   --regions REGIONS     Path to pre-annotated regions in GFF3 or Genbank format (regions only, no functional annotations).
   --proteins PROTEINS   Fasta file of trusted protein sequences for CDS annotation
+  --hmms HMMS           HMM file of trusted hidden markov models in HMMER format for CDS annotation
   --meta                Run in metagenome mode. This only affects CDS prediction.
 
 Workflow:
@@ -403,6 +442,7 @@ Workflow:
   --skip-sorf           Skip sORF detection & annotation
   --skip-gap            Skip gap detection & annotation
   --skip-ori            Skip oriC/oriT detection & annotation
+  --skip-filter         Skip feature overlap filters
   --skip-plot           Skip generation of circular genome plots
 
 General:
@@ -505,22 +545,22 @@ Due due to uncertain nature of sORF prediction, only those identified via IPS / 
 The Bakta database comprises a set of AA & DNA sequence databases as well as HMM & covariance models.
 At its core Bakta utilizes a compact read-only SQLite DB storing protein sequence digests, lengths, pre-assigned annotations and dbxrefs of UPS, IPS and PSC from:
 
-- **UPS**: UniParc / UniProtKB (289,894,428)
-- **IPS**: UniProt UniRef100 (270,638,882)
-- **PSC**: UniProt UniRef90 (119,631,901)
-- **PSCC**: UniProt UniRef50 (3,134,924)
+- **UPS**: UniParc / UniProtKB (350,631,327)
+- **IPS**: UniProt UniRef100 (330,865,009)
+- **PSC**: UniProt UniRef90 (135,274,518)
+- **PSCC**: UniProt UniRef50 (37,008,138)
 
 This allows the exact protein sequences identification via MD5 digests & sequence lengths as well as the rapid subsequent lookup of related information. Protein sequence digests are checked for hash collisions while the DB creation process. IPS & PSC have been comprehensively pre-annotated integrating annotations & database *dbxrefs* from:
 
-- NCBI nonredundant proteins (IPS: 192,288,757)
+- NCBI nonredundant proteins (UPS: 290,693,966)
 - NCBI COG DB (PSC: 3,513,643)
-- KEGG Kofams (PSC: 19,818,290)
-- SwissProt EC/GO terms (PSC: 336,656)
-- NCBI NCBIfams (PSC: 17,308,678)
-- PHROG (PSC: 11,243)
-- NCBI AMRFinderPlus (IPS: 7,611)
-- ISFinder DB (IPS: 137,670, PSC: 12,380)
-- Pfam families (PSC: 687,250)
+- KEGG Kofams (PSC: 24,267,514)
+- SwissProt EC/GO terms (PSC: 337,264)
+- NCBI NCBIfams (PSC: 21,758,901)
+- PHROG (PSC: 11,717)
+- NCBI AMRFinderPlus (IPS: 8,382)
+- ISFinder DB (IPS: 155,449, PSC: 14,481)
+- Pfam families (PSC: 659,781)
 
 To provide high quality annotations for distinct protein sequences of high importance (AMR, VF, *etc*) which cannot sufficiently be covered by the IPS/PSC approach, Bakta provides additional expert systems. For instance, AMR genes, are annotated via NCBI's AMRFinderPlus.
 An expandable alignment-based expert system supports the incorporation of high quality annotations from multiple sources. This currenlty comprises NCBI's BlastRules as well as VFDB and will be complemented with more expert annotation sources over time. Internally, this expert system is based on a Diamond DB comprising the following information in a standardized format:
@@ -536,8 +576,8 @@ An expandable alignment-based expert system supports the incorporation of high q
 
 Rfam covariance models:
 
-- ncRNA: 802
-- ncRNA cis-regulatory regions: 270
+- ncRNA: 779
+- ncRNA cis-regulatory regions: 288
 
 ori sequences:
 
@@ -548,13 +588,13 @@ To provide FAIR annotations, the database releases are SemVer versioned (w/o pat
 
 As this taxonomic-untargeted database is fairly demanding in terms of storage consumption, we also provide a lightweight DB type providing all non-coding feature information but only PSCC information from UniRef50 clusters for CDS. If download bandwiths or storage requirements become an issue or if shorter runtimes are favored over more-specific annotation, the `light` DB will do the job.
 
-Latest database version: 5.1
+Latest database version: 6.0
 DB types:
 
-- `light`: 1.4 Gb zipped, 3.4 Gb unzipped, MD5: 31b3fbdceace50930f8607f8d664d3f4
-- `full`: 37 Gb zipped, 71 Gb unzipped, MD5: f8823533b789dd315025fdcc46f1a8c1
+- `light`: 1.3 Gb zipped, 3.9 Gb unzipped, MD5: 4a6e059ded39e9c5537ef4137d2f5648
+- `full`: 30 Gb zipped, 84 Gb unzipped, MD5: 4c1115e40abfa2b464ae5dd988bdd88e
 
-All database releases are hosted at Zenodo: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4247252.svg)](https://doi.org/10.5281/zenodo.4247252)
+All database releases are hosted at Zenodo: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14916843.svg)](https://doi.org/10.5281/zenodo.14916843)
 
 ## Genome Submission
 
@@ -582,7 +622,7 @@ $ gunzip mac.table2asn.gz
 $ chmod 755 linux64.table2asn.gz mac.table2asn.gz
 
 # create the SQN file:
-$ linux64.table2asn -M n -J -c w -t template.txt -V vbt -l paired-ends -i GCF_000008865.2.fna -f GCF_000008865.2.gff3 -o GCF_000008865.2.sqn -Z
+$ linux64.table2asn -Z -W -M n -J -c w -t template.txt -V vbt -l paired-ends -i GCF_000008865.2.fna -f GCF_000008865.2.gff3 -o GCF_000008865.2.sqn
 ```
 
 ### ENA
@@ -592,17 +632,17 @@ Please have all additional files (manifest.tsv, chrom-list.tsv) prepared as desc
 
 ```bash
 # download ENA Webin-CLI
-$ wget https://github.com/enasequence/webin-cli/releases/download/v4.0.0/webin-cli-4.0.0.jar
+$ wget https://github.com/enasequence/webin-cli/releases/download/8.1.0/webin-cli-8.1.0.jar
 
 $ gzip -k GCF_000008865.2.embl
 $ gzip -k chrom-list.tsv
-$ java -jar webin-cli-4.0.0.jar -submit -userName=<EMAIL> -password <PWD> -context genome -manifest manifest.tsv
+$ java -jar webin-cli-8.1.0.jar -submit -userName=<LOGIN> -password <PWD> -context genome -manifest manifest.tsv
 ```
 
 Exemplarey manifest.tsv and chrom-list.tsv files might look like:
 
 ```bash
-$ cat chrom-list.tsv
+$ cat manifest.tsv
 STUDY    PRJEB44484
 SAMPLE    ERS6291240
 ASSEMBLYNAME    GCF
@@ -646,7 +686,10 @@ The `<prefix>` can be set via `--prefix <prefix>`. If no prefix is set, Bakta us
 ### Usage
 
 ```bash
-usage: bakta_proteins [--db DB] [--output OUTPUT] [--prefix PREFIX] [--force] [--proteins PROTEINS] [--help] [--verbose] [--debug] [--threads THREADS] [--tmp-dir TMP_DIR] [--version] <input>
+usage: bakta_proteins [--db DB] [--output OUTPUT] [--prefix PREFIX] [--force]
+                      [--proteins PROTEINS]
+                      [--help] [--verbose] [--debug] [--threads THREADS] [--tmp-dir TMP_DIR] [--version]
+                      <input>
 
 Rapid & standardized annotation of bacterial genomes, MAGs & plasmids
 
@@ -676,7 +719,7 @@ General:
 
 ## Genome plots
 
-Bakta allows the creation of circular genome plots via [Circos](http://circos.ca). Plots are generated as part of the default workflow and saved as `PNG` and `SVG` files. In addition to the default workflow, Bakta provides a dedicated CLI entry point `bakta_plot`:
+Bakta allows the creation of circular genome plots via [pyCirclize](https://github.com/moshi4/pyCirclize). Plots are generated as part of the default workflow and saved as `PNG` and `SVG` files. In addition to the default workflow, Bakta provides a dedicated CLI entry point `bakta_plot`:
 
 Examples:
 
@@ -691,12 +734,15 @@ It accepts the results of a former annotation process in JSON format and allows 
 ### Usage
 
 ```bash
-usage: bakta_plot [--config CONFIG] [--output OUTPUT] [--prefix PREFIX] [--sequences SEQUENCES] [--type {features,cog}] [--help] [--verbose] [--debug] [--tmp-dir TMP_DIR] [--version] <input>
+usage: bakta_plot [--config CONFIG] [--output OUTPUT] [--prefix PREFIX]
+                  [--sequences SEQUENCES] [--type {features,cog}] [--label LABEL] [--size {4,8,16}] [--dpi {150,300,600}]
+                  [--help] [--verbose] [--debug] [--tmp-dir TMP_DIR] [--version]
+                  <input>
 
 Rapid & standardized annotation of bacterial genomes, MAGs & plasmids
 
 positional arguments:
-  <input>               Bakta annotations in JSON format
+  <input>               Bakta annotations in (zipped) JSON format
 
 Input / Output:
   --config CONFIG, -c CONFIG
@@ -711,6 +757,9 @@ Plotting:
                         Sequences to plot: comma separated number or name (default = all, numbers one-based)
   --type {features,cog}
                         Plot type: feature/cog (default = features)
+  --label LABEL         Plot center label (for line breaks use '|')
+  --size {4,8,16}       Plot size in inches: 4/8/16 (default = 8)
+  --dpi {150,300,600}   Plot resolution as dots per inch: 150/300/600 (default = 300)
 
 General:
   --help, -h            Show this help message and exit
@@ -736,6 +785,14 @@ Currently, there are two types of plots: `features` (the default) and `cog`. In 
 In the `cog` mode, all protein-coding genes (CDS) are colored due to assigned COG functional categories. To better distinguish non-coding genes, these are plotted on an additional 3rd ring.
 
 In addition, both plot types share two innermost GC content and GC skew rings. The first ring represents the GC content per sliding window over the entire sequence(s) in green (`#33a02c`) and red `#e31a1c` representing GC above and below average, respectively. The 2nd ring represents the GC skew in orange (`#fdbf6f`) and blue (`#1f78b4`). The GC skew gives hints on a replicon's replication bubble and hence, on the completeness of the assembly. On a complete & circular bacterial chromosome, you normally see two inflection points at the origin of replication and at its opposite region -> [Wikipedia](https://en.wikipedia.org/wiki/GC_skew)
+
+Custom plot labels (text in the center) can be provided via `--label`:
+
+```bash
+bakta_plot --sequences 2 --dpi 300 --size 8 --prefix plot-cog-p2 --type cog --label="pO157|plasmid, 92.7 kbp"
+```
+
+![Plot example of Bakta test genome.](/examples/plot-cog-p2.png)
 
 ## Auxiliary scripts
 
@@ -772,8 +829,7 @@ Bakta is *standing on the shoulder of giants* taking advantage of many great sof
 - BLAST+ <https://doi.org/10.1186/1471-2105-10-421>
 - PyHMMER <https://doi.org/10.21105/joss.04296> HMMER <https://doi.org/10.1371/journal.pcbi.1002195>
 - AMRFinderPlus <https://doi.org/10.1038/s41598-021-91456-0>
-- DeepSig <https://doi.org/10.1093/bioinformatics/btx818>
-- Circos <https://doi.org/10.1101/gr.092759.109>
+- pyCirclize https://github.com/moshi4/pyCirclize
 
 ### Databases
 
@@ -797,7 +853,7 @@ Bakta is *standing on the shoulder of giants* taking advantage of many great sof
 If AMRFinder constantly crashes even on fresh setups and Bakta's database was downloaded manually, then AMRFinder needs to setup its own internal database. This is required only once: `amrfinder_update --force_update --database <bakta-db>/amrfinderplus-db`. You could also try Bakta's internal database download logic automatically taking care of this: `bakta_db download --output <bakta-db>`
 
 - **DeepSig not found in Conda environment**
-For the prediction of signal predictions, Bakta uses DeepSig that is currently not available for MacOS. Therefore, we decided to exclude DeepSig from Bakta's default Conda dependencies because otherwise it would not be installable on MacOS systems. On Linux systems it can be installed via `conda install -c conda-forge -c bioconda python=3.8 deepsig`.
+For the prediction of signal predictions, Bakta uses DeepSig that is currently not available for MacOS and only up to Bakta v1.9.4. Therefore, we decided to exclude DeepSig from Bakta's default Conda dependencies because otherwise it would not be installable on MacOS systems. On Linux systems it can be installed via `conda install -c conda-forge -c bioconda python=3.8 deepsig`.
 
 - **Nice, but I'm mising XYZ...**
 Bakta is quite new and we're keen to constantly improve it and further expand its feature set. In case there's anything missing, please do not hesitate to open an issue and ask for it!

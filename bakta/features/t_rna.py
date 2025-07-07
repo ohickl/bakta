@@ -1,19 +1,20 @@
 import concurrent.futures
 import logging
 import subprocess as sp
-
 from collections import OrderedDict
 from pathlib import Path
+from typing import Dict, List, Any
 
 from Bio import SeqIO
 
+# Assuming these modules are available in the project structure
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.so as so
 import bakta.utils as bu
 
 
-log = logging.getLogger('T_RNA')
+log = logging.getLogger(__name__)
 
 
 AMINO_ACID_DICT = {
@@ -43,9 +44,13 @@ AMINO_ACID_DICT = {
 }
 
 def run_trnascan_on_chunk(chunk_path: Path, txt_output_path: Path, fasta_output_path: Path, env: dict, threads: int = 1):
+    """
+    Runs tRNAscan-SE on a single chunk of sequences.
+    (This function is from your original script and remains mostly unchanged.)
+    """
     cmd = [
         'tRNAscan-SE',
-        '-G',
+        '-B',  # Use bacterial model, as in the new main branch script
         '--output', str(txt_output_path),
         '--fasta', str(fasta_output_path),
         '--thread', str(threads),
@@ -61,140 +66,128 @@ def run_trnascan_on_chunk(chunk_path: Path, txt_output_path: Path, fasta_output_
     )
     if proc.returncode != 0:
         log.debug('stdout=\'%s\', stderr=\'%s\'', proc.stdout, proc.stderr)
-        log.warning('tRNAs failed! tRNAscan-SE-error-code=%d', proc.returncode)
-        raise Exception(f'tRNAscan-SE error! error code: {proc.returncode}')
+        log.warning('tRNA prediction failed for chunk %s! tRNAscan-SE-error-code=%d', chunk_path.name, proc.returncode)
+        raise Exception(f'tRNAscan-SE error for chunk {chunk_path.name}! error code: {proc.returncode}')
 
 
-def predict_t_rnas(genome: dict, chunk_paths: Path):
-    """Search for tRNA sequences."""
+def predict_t_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List[Dict]:
+    """
+    Search for tRNA genes using a parallelized, chunk-based approach.
+    Adapted to the new main schema.
+    """
+    final_txt_output_path = cfg.tmp_path.joinpath('trna.tsv')
+    final_fasta_output_path = cfg.tmp_path.joinpath('trna.fasta')
+    chunk_output_dir = cfg.tmp_path.joinpath('trna_chunks_out')
+    chunk_output_dir.mkdir(parents=True, exist_ok=True)
 
-    txt_output_path = cfg.tmp_path.joinpath('trna.tsv')
-    fasta_output_path = cfg.tmp_path.joinpath('trna.fasta')
-    chunk_dir = cfg.tmp_path.joinpath('chunks_trna')
-    chunk_dir.mkdir(parents=True, exist_ok=True)
+    chunk_txt_paths = [chunk_output_dir.joinpath(f'{p.name}.tsv') for p in fasta_chunk_paths]
+    chunk_fasta_paths = [chunk_output_dir.joinpath(f'{p.name}.fasta') for p in fasta_chunk_paths]
 
-    chunk_txt_output_paths = [chunk_dir.joinpath(f'chunk_{i}.tsv') for i in range(len(chunk_paths))]
-    chunk_fasta_output_paths = [chunk_dir.joinpath(f'chunk_{i}.fasta') for i in range(len(chunk_paths))]
-
-    # Use at max 8 threads for tRNAscan-SE, divide chunks by threads to get the number of parallel chunks to process
-    trnascan_threads = min(cfg.threads, 8)
-    parallel_chunks = len(chunk_paths) // trnascan_threads
-
-    # Submit tasks to the executor
-    with concurrent.futures.ProcessPoolExecutor(max_workers=parallel_chunks) as executor:
+    # tRNAscan-SE does not benefit from more than a few threads per process.
+    # We parallelize by running on multiple chunks simultaneously.
+    with concurrent.futures.ProcessPoolExecutor(max_workers=cfg.threads) as executor:
         futures = [
-            executor.submit(run_trnascan_on_chunk, chunk_path, chunk_txt_output_path, chunk_fasta_output_path, cfg.env, trnascan_threads)
-            for chunk_path, chunk_txt_output_path, chunk_fasta_output_path in zip(chunk_paths, chunk_txt_output_paths, chunk_fasta_output_paths)
+            executor.submit(run_trnascan_on_chunk, chunk_path, txt_path, fasta_path, cfg.env, 1)
+            for chunk_path, txt_path, fasta_path in zip(fasta_chunk_paths, chunk_txt_paths, chunk_fasta_paths)
         ]
 
-        # Collect results in the order of submission
-        for future in futures:
+        for future in concurrent.futures.as_completed(futures):
             try:
                 future.result()
             except Exception as e:
                 log.error('A tRNAscan-SE run failed: %s', e)
+                executor.shutdown(wait=False, cancel_futures=True)
                 raise
 
+    # Concatenate results
+    with final_txt_output_path.open('w') as outfile:
+        header_written = False
+        for path in chunk_txt_paths:
+            if path.exists() and path.stat().st_size > 0:
+                with path.open() as infile:
+                    lines = infile.readlines()
+                    if not header_written:
+                        outfile.writelines(lines)
+                        header_written = True
+                    else:
+                        outfile.writelines(lines[3:]) # Skip header lines
 
-    # Concatenate results (since the first three lines are headers, we take the header from the first file and skip the rest)
-    header_seen = False
-    with txt_output_path.open('w') as outfile:
-        for chunk_txt_output_path in chunk_txt_output_paths:
-            with chunk_txt_output_path.open() as infile:
-                lines = infile.readlines()
-                if not header_seen:
-                    # Check if the file is empty
-                    if not lines:
-                        continue
-                    outfile.writelines(lines)  # Write the header from the first file
-                    header_seen = True
-                else:
-                    outfile.writelines(lines[3:])  # Skip the first three lines (header) for subsequent files
+    with final_fasta_output_path.open('w') as outfile:
+        for path in chunk_fasta_paths:
+            if path.exists():
+                with path.open() as infile:
+                    outfile.write(infile.read())
 
-    with fasta_output_path.open('w') as outfile:
-        for chunk_fasta_output_path in chunk_fasta_output_paths:
-            with chunk_fasta_output_path.open() as infile:
-                outfile.writelines(infile.readlines())
-
-    # Clean up output chunks
-    for chunk_txt_output_path in chunk_txt_output_paths:
-        chunk_txt_output_path.unlink()
-    for chunk_fasta_output_path in chunk_fasta_output_paths:
-        chunk_fasta_output_path.unlink()
-    # Remove chunk directory
-    chunk_dir.rmdir()
+    # Clean up output chunks and directory
+    for path in chunk_txt_paths + chunk_fasta_paths:
+        if path.exists():
+            path.unlink()
+    chunk_output_dir.rmdir()
 
     log.info('tRNA prediction completed successfully.')
 
     trnas = {}
-    contigs = {c['id']: c for c in genome['contigs']}
-    with txt_output_path.open() as fh:
-        for line in fh.readlines()[3:]:  # skip first 3 lines
-            (contig_id, trna_id, start, stop, trna_type, anti_codon, intron_begin, bounds_end, score, note) = line.split('\t')
+    # ADAPTED: Use the 'data' dictionary as required by the new schema
+    sequences = {s['id']: s for s in data['sequences']}
+    with final_txt_output_path.open() as fh:
+        for line in fh.readlines()[3:]:
+            (sequence_id, trna_id, start, stop, trna_type, anti_codon, _, _, score, note) = line.split('\t')
 
             start, stop, strand = int(start), int(stop), bc.STRAND_FORWARD
-            if(start > stop):  # reverse
+            if start > stop:
                 start, stop = stop, start
                 strand = bc.STRAND_REVERSE
-            contig_id = contig_id.strip()  # bugfix for extra single whitespace in tRNAscan-SE output
+            sequence_id = sequence_id.strip()
 
             trna = OrderedDict()
             trna['type'] = bc.FEATURE_T_RNA
-            trna['contig'] = contig_id
-            # Fix negative start position
-            if int(start) <= 0:
-                log.warning(f'contig={contig_id}, trna_id={trna_id}, negative start position={start}, setting to 1.')
-                start = 1
+            trna['sequence'] = sequence_id
             trna['start'] = start
-            # Fix negative stop position
-            if int(stop) <= 0:
-                log.warning(f'contig={contig_id}, trna_id={trna_id}, negative stop position={stop}, setting to 1.')
-                stop = 1
             trna['stop'] = stop
             trna['strand'] = strand
             trna['gene'] = None
             trna['product'] = 'tRNA-Xxx'
-            if(trna_type != 'Undet' and trna_type != 'Sup'):
-                aa_code = AMINO_ACID_DICT.get(trna_type.lower(), ('', None))[0]
+            
+            if trna_type != 'Undet' and trna_type != 'Sup':
+                aa_code, so_term = AMINO_ACID_DICT.get(trna_type.lower(), ('', None))
                 trna['gene'] = f'trn{aa_code}'
                 trna['product'] = f'tRNA-{trna_type}({anti_codon.lower()})'
                 trna['amino_acid'] = trna_type
                 trna['anti_codon'] = anti_codon.lower()
+                trna['db_xrefs'] = [so_term.id] if so_term else []
+            else:
+                trna['db_xrefs'] = []
 
-            if('pseudo' in note):
-                trna['pseudo'] = True
+            if 'pseudo' in note:
+                trna[bc.PSEUDOGENE] = True
 
             trna['score'] = float(score)
 
-            nt = bu.extract_feature_sequence(trna, contigs[contig_id])  # extract nt sequences
+            nt = bu.extract_feature_sequence(trna, sequences[sequence_id])
             trna['nt'] = nt
 
-            trna['db_xrefs'] = []
-            so_term = AMINO_ACID_DICT.get(trna_type.lower(), ('', None))[1]
-            if(so_term):
-                trna['db_xrefs'].append(so_term.id)
-
-            key = f'{contig_id}.trna{trna_id}'
+            key = f'{sequence_id}.trna{trna_id}'
             trnas[key] = trna
             log.info(
-                'contig=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, score=%1.1f, nt=[%s..%s]',
-                trna['contig'], trna['start'], trna['stop'], trna['strand'], trna.get('gene', ''), trna['product'], trna['score'], nt[:10], nt[-10:]
+                'seq=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, score=%1.1f',
+                trna['sequence'], trna['start'], trna['stop'], trna['strand'], trna.get('gene', ''), trna['product'], trna['score']
             )
 
-    with fasta_output_path.open() as fh:
+    with final_fasta_output_path.open() as fh:
         for record in SeqIO.parse(fh, 'fasta'):
-            trna = trnas[record.id]
-            nt = str(record.seq).upper()
-            if('anti_codon' in trna and trna['amino_acid'].lower() not in ['fmet', 'ile2', 'sec', 'sup']):  # exclude fMet, Ile2 and Sec (INSDC wrong anticodon issue)
-                anticodon_pos = trna['nt'].lower().find(trna['anti_codon'])
-                if(anticodon_pos > -1):
-                    if(trna['strand'] == bc.STRAND_FORWARD):
-                        start = trna['start'] + anticodon_pos
-                        stop = start + 2
-                    else:
-                        stop = trna['stop'] - anticodon_pos
-                        start = stop - 2
-                    trna['anti_codon_pos'] = (start, stop)
-    trnas = list(trnas.values())
-    log.info('predicted=%i', len(trnas))
-    return trnas
+            if record.id in trnas:
+                trna = trnas[record.id]
+                if 'anti_codon' in trna and trna['amino_acid'].lower() not in ['fmet', 'ile2', 'sec', 'sup']:
+                    anticodon_pos = trna['nt'].lower().find(trna['anti_codon'])
+                    if anticodon_pos > -1:
+                        if trna['strand'] == bc.STRAND_FORWARD:
+                            ac_start = trna['start'] + anticodon_pos
+                            ac_stop = ac_start + 2
+                        else:
+                            ac_stop = trna['stop'] - anticodon_pos
+                            ac_start = ac_stop - 2
+                        trna['anti_codon_pos'] = (ac_start, ac_stop)
+
+    trnas_list = list(trnas.values())
+    log.info('predicted=%i', len(trnas_list))
+    return trnas_list

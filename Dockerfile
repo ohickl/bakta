@@ -13,11 +13,10 @@ RUN apk update && apk add wget tar bash \
     && rm glibc-2.32-r0.apk \
     && wget --no-iri -qO- https://micromamba.snakepit.net/api/micromamba/linux-64/latest | tar -xvj bin/micromamba \
     && touch /root/.bashrc \
-    && ./bin/micromamba shell init -s bash -p /opt/conda  \
+    && ./bin/micromamba shell init -s bash -r /opt/conda  \
     && cp /root/.bashrc /opt/conda/bashrc
 
 COPY environment.yml /tmp/
-RUN echo -e '\n  - deepsig>=1.2.5' >> /tmp/environment.yml
 
 SHELL ["bash", "-l" ,"-c"]
 

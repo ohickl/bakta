@@ -6,6 +6,19 @@ FILES = [
     'test.txt',
     'test.json',
     'test.tsv',
+    'test.inference.tsv',
+    'test.gff3',
+    'test.gbff',
+    'test.embl',
+    'test.fna',
+    'test.faa',
+    'test.png',
+    'test.svg'
+]
+
+FILES_IO = [
+    'test.txt',
+    'test.tsv',
     'test.gff3',
     'test.gbff',
     'test.embl',

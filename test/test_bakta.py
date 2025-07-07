@@ -8,19 +8,7 @@ import pytest
 
 import bakta.constants as bc
 
-from .conftest import FILES, SKIP_PARAMETERS
-
-
-def check_deepsig():
-    command = ('deepsig', '--version')
-    is_available = False
-    try:
-        # tool_output = str(sp.check_output(command, stderr=sp.STDOUT))  # stderr must be added in case the tool output is not piped into stdout
-        sp.check_output(command, stderr=sp.STDOUT)  # stderr must be added in case the tool output is not piped into stdout
-        is_available = True
-    except:
-        print(f"WARNING: {command[0]} not found or not executable! Skip dependen test.")
-    return is_available
+from .conftest import FILES, FILES_IO, SKIP_PARAMETERS
 
 
 @pytest.mark.parametrize(
@@ -45,7 +33,6 @@ def test_bakta_mock_skipped_features(db, tmpdir):
         assert Path.exists(tmpdir_path.joinpath(file))
 
 
-@pytest.mark.skipif(check_deepsig() == False, reason=f'Skip on unavailable DeepSig')
 def test_bakta_plasmid(tmpdir):
     # full test on plasmid
     proc = run(
@@ -81,34 +68,56 @@ def test_bakta_plasmid(tmpdir):
         bc.FEATURE_ORIT: 0
     }
     for type, count in feature_counts_expected.items():
-        assert len([f for f in features if f['type'] == type]) == count
+        assert len([feat for feat in features if feat['type'] == type]) == count
 
 
 @pytest.mark.parametrize(
     'db',
     [
-        ('db'),  # full DB
+        pytest.param('db', marks=pytest.mark.dependency(name="test_bakta_genome")),  # full DB
         ('db-light')  # light DB
     ]
 )
-def test_bakta_genome(db, tmpdir):
+def test_bakta_genome(db, tmpdir, request):
     # full test on complete genome in compliant mode
-    proc = run(['bin/bakta', '--db', f'test/{db}', '--verbose', '--output', tmpdir, '--force', '--force', '--prefix', 'test', '--min-contig-length', '200', '--complete', '--compliant', '--proteins', 'test/data/user-proteins.faa', '--genus', 'Foo gen. nov.', '--species', 'bar sp. nov.', '--strain', 'test 1', 'test/data/GCF_000008865.2.fna.gz'])
+    output_path = Path(tmpdir).joinpath(db)
+    proc = run(
+        [
+            'bin/bakta',
+            '--db', f'test/{db}',
+            '--verbose',
+            '--output', str(output_path),
+            '--force',
+            '--prefix', 'test',
+            '--min-contig-length', '200',
+            '--complete',
+            '--genus', 'Foo gen. nov.',
+            '--species', 'bar sp. nov.',
+            '--strain', 'test 1',
+            '--replicons', 'test/data/replicons.tsv',
+            '--regions', 'test/data/NC_002127.1-region.gff3',
+            '--proteins', 'test/data/user-proteins.faa',
+            '--hmms', 'test/data/NF000185.2.HMM',
+            '--compliant',
+            'test/data/GCF_000008865.2.fna.gz']
+    )
     assert proc.returncode == 0
 
-    tmpdir_path = Path(tmpdir)
     for file in FILES:
-        output_path = tmpdir_path.joinpath(file)
-        assert Path.exists(output_path)
-        assert output_path.stat().st_size > 0
+        file_path = output_path.joinpath(file)
+        assert Path.exists(file_path)
+        assert file_path.stat().st_size > 0
 
-    results_path = tmpdir_path.joinpath('test.json')
+    results_path = output_path.joinpath('test.json')
+    if(db == 'db'):
+        request.config.cache.set('test_bakta_json', str(results_path))  # cache for later re-usage
+
     results = None
     with results_path.open() as fh:
         results = json.load(fh)
     assert results is not None
     features = results['features']
-    assert len(features) == 5551
+    assert len(features) == 5550
     feature_counts_expected = {
         bc.FEATURE_T_RNA: 107,
         bc.FEATURE_TM_RNA: 1,
@@ -116,12 +125,37 @@ def test_bakta_genome(db, tmpdir):
         bc.FEATURE_NC_RNA: 57,
         bc.FEATURE_NC_RNA_REGION: 1,
         bc.FEATURE_CRISPR: 1,
-        bc.FEATURE_CDS: 5375,
+        bc.FEATURE_CDS: 5374,
         bc.FEATURE_SORF: 2,
         bc.FEATURE_ORIC: 0,
         bc.FEATURE_ORIV: 0,
         bc.FEATURE_ORIT: 0
     }
     for type, count in feature_counts_expected.items():
-        assert len([f for f in features if f['type'] == type]) == count
+        assert len([feat for feat in features if feat['type'] == type]) == count
 
+
+@pytest.mark.dependency(depends=['test_bakta_genome'])
+def test_bakta_io(tmpdir, request):
+    test_bakta_json = request.config.cache.get('test_bakta_json', None)
+    assert test_bakta_json is not None
+    result_path = Path(test_bakta_json)
+    assert Path.exists(result_path)
+
+    output_path = Path(tmpdir)
+    proc = run(
+        [
+            'bin/bakta_io',
+            '--verbose',
+            '--output', str(output_path),
+            '--force',
+            '--prefix', 'test',
+            test_bakta_json
+        ]
+    )
+    assert proc.returncode == 0
+
+    for file in FILES_IO:
+        file_path = output_path.joinpath(file)
+        assert Path.exists(file_path)
+        assert file_path.stat().st_size > 0
