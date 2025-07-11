@@ -79,19 +79,37 @@ def predict_tm_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List
     total_no_hit_sequences = 0
     with final_txt_output_path.open('w') as outfile:
         for path in chunk_txt_paths:
-            if path.exists() and path.stat().st_size > 0:
-                with path.open() as infile:
-                    lines = infile.readlines()
-                    # Write all lines except the summary line
-                    outfile.writelines(lines[:-1])
-                    # Parse summary line from each chunk
-                    summary_line = lines[-1]
-                    if "sequences" in summary_line and "tmRNA" in summary_line:
-                        parts = summary_line.split()
-                        total_sequences += int(parts[0])
-                        total_tmrna_genes += int(parts[2])
-                        total_no_hit_sequences += int(parts[8])
+            if not path.exists() or path.stat().st_size == 0:
+                continue
 
+            with path.open() as infile:
+                lines = [line for line in infile if line.strip()]
+                if not lines:
+                    continue
+
+                summary_line = None
+                # Find and remove the summary line, which is usually near the end.
+                for i in range(len(lines) - 1, -1, -1):
+                    if "sequences" in lines[i] and "tmRNA" in lines[i]:
+                        summary_line = lines.pop(i)
+                        break
+                
+                # Write all other lines to the combined output, ignoring the end marker.
+                for line in lines:
+                    if not line.startswith('>end'):
+                        outfile.write(line)
+
+                # Safely parse the summary line if it was found
+                if summary_line:
+                    parts = summary_line.split()
+                    try:
+                        # Corresponds to: {N} sequences {N} tmRNA genes, nothing found in {N} sequences
+                        if len(parts) >= 9:
+                            total_sequences += int(parts[0])
+                            total_tmrna_genes += int(parts[2])
+                            total_no_hit_sequences += int(parts[8])
+                    except (ValueError, IndexError) as e:
+                        log.warning(f"Could not parse summary line from {path.name}: '{summary_line.strip()}'. Error: {e}")
 
     # Write the final recalculated summary line
     sensitivity = (total_tmrna_genes / total_sequences * 100) if total_sequences > 0 else 0
@@ -113,9 +131,14 @@ def predict_tm_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List
         sequence_id = None
         for line in fh:
             line = line.strip()
+            if not line:
+                continue
+
             cols = line.split()
             if line.startswith('>'):
-                if len(cols) > 1 and cols[1] == "tmRNA": # Summary line starts with >end
+                # Skip summary lines which can start with a number, e.g. "5 sequences..."
+                # A real sequence header from aragorn is just ">contig_name"
+                if line.startswith('>end') or cols[0].isnumeric():
                     continue
                 sequence_id = cols[0][1:]
             elif len(cols) == 5:
@@ -145,8 +168,6 @@ def predict_tm_rnas(data: Dict[str, Any], fasta_chunk_paths: List[Path]) -> List
                     tmrna['product'] = 'transfer-messenger RNA, SsrA'
                     tmrna['db_xrefs'] = [so.SO_TMRNA.id]
                     
-                    # Aragorn tag peptide location is relative to the tmRNA start
-                    # We need to make it relative to the sequence start
                     if strand == bc.STRAND_FORWARD:
                          tmrna['tag'] = {
                             'start': start + tag_start - 1,
