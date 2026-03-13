@@ -75,6 +75,7 @@ def main():
         if(cfg.locus_tag): print(f'\tlocus tag prefix: {cfg.locus_tag}')
         if(cfg.meta): print(f'\tmeta mode: {cfg.meta}')
         if(cfg.partial): print(f'\tpredict partial genes: {cfg.partial}')
+        if(cfg.mag_quality_mode): print(f'\tmag quality mode: {cfg.mag_quality_mode}')
         if(cfg.complete): print(f'\tcomplete replicons: {cfg.complete}')
         print(f'\toutput: {cfg.output_path}')
         if(cfg.force): print(f'\tforce: {cfg.force}')
@@ -269,7 +270,9 @@ def main():
             cdss.extend(imported_cdss)
 
         if(len(cdss) > 0):
-            if(cfg.db_info['type'] == 'full'):
+            if(cfg.mag_quality_mode):
+                pass
+            elif(cfg.db_info['type'] == 'full'):
                 log.debug('lookup CDS UPS/IPS')
                 cdss_ups, cdss_not_found_ups = ups.lookup(cdss)
                 cdss_ips, cdss_not_found_ips = ips.lookup(cdss_ups)
@@ -279,7 +282,7 @@ def main():
                 cdss_not_found = [*cdss]
                 print(f'\tskip UPS/IPS detection with light db version')
 
-            if(len(cdss_not_found) > 0):
+            if((not cfg.mag_quality_mode) and len(cdss_not_found) > 0):
                 if(cfg.db_info['type'] == 'full'):
                     log.debug('search CDS PSC')
                     cdss_psc, cdss_pscc, cdss_not_found = psc.search(cdss_not_found)
@@ -289,67 +292,70 @@ def main():
                     log.debug('search CDS PSCC')
                     cdss_pscc, cdss_not_found = pscc.search(cdss_not_found)
                     print(f'\tfound PSCCs: {len(cdss_pscc)}')
-            print('\tlookup annotations...')
-            log.debug('lookup CDS PSCs')
-            psc.lookup(cdss)  # lookup PSC info
-            pscc.lookup(cdss)  # lookup PSCC info
+            if(cfg.mag_quality_mode):
+                print('\tmag-quality mode: skip CDS annotation searches and expert systems...')
+            else:
+                print('\tlookup annotations...')
+                log.debug('lookup CDS PSCs')
+                psc.lookup(cdss)  # lookup PSC info
+                pscc.lookup(cdss)  # lookup PSCC info
 
-            print('\tconduct expert systems...')  # conduct expert systems annotation
-            cds_aa_path = cfg.tmp_path.joinpath('cds.expert.faa')
-            orf.write_internal_faa(cdss, cds_aa_path)
-            log.debug('conduct expert system: amrfinder')
-            expert_amr_found = exp_amr.search(cdss, cds_aa_path)
-            print(f'\t\tamrfinder: {len(expert_amr_found)}')
-            log.debug('conduct expert system: aa seqs')
-            diamond_db_path = cfg.db_path.joinpath('expert-protein-sequences.dmnd')
-            expert_aa_found = exp_aa_seq.search(cdss, cds_aa_path, 'expert_proteins', diamond_db_path)
-            print(f'\t\tprotein sequences: {len(expert_aa_found)}')
+                print('\tconduct expert systems...')  # conduct expert systems annotation
+                cds_aa_path = cfg.tmp_path.joinpath('cds.expert.faa')
+                orf.write_internal_faa(cdss, cds_aa_path)
+                log.debug('conduct expert system: amrfinder')
+                expert_amr_found = exp_amr.search(cdss, cds_aa_path)
+                print(f'\t\tamrfinder: {len(expert_amr_found)}')
+                log.debug('conduct expert system: aa seqs')
+                diamond_db_path = cfg.db_path.joinpath('expert-protein-sequences.dmnd')
+                expert_aa_found = exp_aa_seq.search(cdss, cds_aa_path, 'expert_proteins', diamond_db_path)
+                print(f'\t\tprotein sequences: {len(expert_aa_found)}')
 
-            if(cfg.user_proteins):
-                log.debug('conduct expert system: user aa seqs')
-                user_aa_path = cfg.tmp_path.joinpath('user-proteins.faa')
-                no_user_proteins, no_skipped_user_proteins = exp_aa_seq.write_user_protein_sequences(user_aa_path)
-                if(no_skipped_user_proteins > 0):
-                    print(f'\t\tWARNING: skipped incorrectly formatted user proteins: {no_skipped_user_proteins}, imported: {no_user_proteins}')
-                user_aa_found = exp_aa_seq.search(cdss, cds_aa_path, 'user_proteins', user_aa_path)
-                print(f'\t\tuser protein sequences: {len(user_aa_found)}')
+                if(cfg.user_proteins):
+                    log.debug('conduct expert system: user aa seqs')
+                    user_aa_path = cfg.tmp_path.joinpath('user-proteins.faa')
+                    no_user_proteins, no_skipped_user_proteins = exp_aa_seq.write_user_protein_sequences(user_aa_path)
+                    if(no_skipped_user_proteins > 0):
+                        print(f'\t\tWARNING: skipped incorrectly formatted user proteins: {no_skipped_user_proteins}, imported: {no_user_proteins}')
+                    user_aa_found = exp_aa_seq.search(cdss, cds_aa_path, 'user_proteins', user_aa_path)
+                    print(f'\t\tuser protein sequences: {len(user_aa_found)}')
 
-            if(cfg.user_hmms):
-                log.debug('conduct expert system: user HMM')
-                user_hmm_found = exp_aa_hmms.search(cdss, cfg.user_hmms)
-                print(f'\t\tuser HMM sequences: {len(user_hmm_found)}')
+                if(cfg.user_hmms):
+                    log.debug('conduct expert system: user HMM')
+                    user_hmm_found = exp_aa_hmms.search(cdss, cfg.user_hmms)
+                    print(f'\t\tuser HMM sequences: {len(user_hmm_found)}')
 
-            print('\tcombine annotations and mark hypotheticals...')
-            log.debug('combine CDS annotations')
-            for cds in cdss:
-                anno.combine_annotation(cds)  # combine IPS & PSC annotations and mark hypotheticals
+                print('\tcombine annotations and mark hypotheticals...')
+                log.debug('combine CDS annotations')
+                for cds in cdss:
+                    anno.combine_annotation(cds)  # combine IPS & PSC annotations and mark hypotheticals
 
-            hypotheticals = [cds for cds in cdss if 'hypothetical' in cds and 'edge' not in cds and cds.get('start_type', 'Edge') != 'Edge']
-            if(len(hypotheticals) > 0  and  not cfg.skip_pseudo):
-                if(cfg.db_info['type'] == 'full'):
-                    print('\tdetect pseudogenes...')
-                    log.debug('search pseudogene candidates')
-                    pseudo_candidates = feat_cds.predict_pseudo_candidates(hypotheticals)
-                    print(f'\t\tcandidates: {len(pseudo_candidates)}')
-                    pseudogenes = feat_cds.detect_pseudogenes(pseudo_candidates, cdss, data) if len(pseudo_candidates) > 0 else []
-                    psc.lookup(pseudogenes, pseudo=True)
-                    pscc.lookup(pseudogenes, pseudo=True)
-                    for pseudogene in pseudogenes:
-                        anno.combine_annotation(pseudogene)
-                    print(f'\t\tverified: {len(pseudogenes)}')
-                else:
-                    print(f'\tskip pseudogene detection with light db version')
-            hypotheticals = [cds for cds in cdss if 'hypothetical' in cds]
-            if(len(hypotheticals) > 0):
-                log.debug('analyze hypotheticals')
-                print(f'\tanalyze hypothetical proteins: {len(hypotheticals)}')
-                pfam_hits = feat_cds.predict_pfam(hypotheticals)
-                print(f"\t\tdetected Pfam hits: {len(pfam_hits)} ")
-                feat_cds.analyze_proteins(hypotheticals)
-                print('\t\tcalculated proteins statistics')
-            
-            print('\trevise special cases...')
-            feat_cds.revise_special_cases_annotated(data, cdss)
+                hypotheticals = [cds for cds in cdss if 'hypothetical' in cds and 'edge' not in cds and cds.get('start_type', 'Edge') != 'Edge']
+                if(len(hypotheticals) > 0  and  not cfg.skip_pseudo):
+                    if(cfg.db_info['type'] == 'full'):
+                        print('\tdetect pseudogenes...')
+                        log.debug('search pseudogene candidates')
+                        pseudo_candidates = feat_cds.predict_pseudo_candidates(hypotheticals)
+                        print(f'\t\tcandidates: {len(pseudo_candidates)}')
+                        pseudogenes = feat_cds.detect_pseudogenes(pseudo_candidates, cdss, data) if len(pseudo_candidates) > 0 else []
+                        psc.lookup(pseudogenes, pseudo=True)
+                        pscc.lookup(pseudogenes, pseudo=True)
+                        for pseudogene in pseudogenes:
+                            anno.combine_annotation(pseudogene)
+                        print(f'\t\tverified: {len(pseudogenes)}')
+                    else:
+                        print(f'\tskip pseudogene detection with light db version')
+                hypotheticals = [cds for cds in cdss if 'hypothetical' in cds]
+                if(len(hypotheticals) > 0):
+                    log.debug('analyze hypotheticals')
+                    print(f'\tanalyze hypothetical proteins: {len(hypotheticals)}')
+                    pfam_hits = feat_cds.predict_pfam(hypotheticals)
+                    print(f"\t\tdetected Pfam hits: {len(pfam_hits)} ")
+                    feat_cds.analyze_proteins(hypotheticals)
+                    print('\t\tcalculated proteins statistics')
+                
+                print('\trevise special cases...')
+                feat_cds.revise_special_cases_annotated(data, cdss)
 
         data['features'].extend(cdss)
 
@@ -379,40 +385,44 @@ def main():
             print(f'\tdiscarded spurious: {len(discarded_sorfs)}')
             sorfs = [sorf for sorf in sorfs if 'discarded' not in sorf]
 
-        log.debug('lookup sORF UPS/IPS')
-        sorf_upss, sorfs_not_found = ups.lookup(sorfs)
-        sorf_ipss, tmp = ips.lookup(sorf_upss)
-        sorfs_not_found.extend(tmp)
-        print(f'\tdetected IPSs: {len(sorf_ipss)}')
+        if(cfg.mag_quality_mode):
+            print('\tmag-quality mode: retain structural sORFs without annotation searches...')
+            data['features'].extend(sorfs)
+            print(f'\tretained sORFs: {len(sorfs)}')
+        else:
+            log.debug('lookup sORF UPS/IPS')
+            sorf_upss, sorfs_not_found = ups.lookup(sorfs)
+            sorf_ipss, tmp = ips.lookup(sorf_upss)
+            sorfs_not_found.extend(tmp)
+            print(f'\tdetected IPSs: {len(sorf_ipss)}')
 
-        sorf_pscs_psccs = []
-        if(len(sorfs_not_found) > 0):
-            if(cfg.db_info['type'] == 'full'):
-                log.debug('search sORF PSC')
-                cdss_not_found_tmp, sorfs_not_found = s_orf.search_pscs(sorfs_not_found)
-                sorf_pscs_psccs.extend(cdss_not_found_tmp)
-                print(f'\tfound PSCs: {len(sorf_pscs_psccs)}')
-            else:
-                log.debug('search sORF PSCC')
-                sorf_psccs, sorfs_not_found = s_orf.search_psccs(sorfs_not_found)
-                sorf_pscs_psccs.extend(sorf_psccs)
-                print(f'\tfound PSCCs: {len(sorf_pscs_psccs)}')
+            sorf_pscs_psccs = []
+            if(len(sorfs_not_found) > 0):
+                if(cfg.db_info['type'] == 'full'):
+                    log.debug('search sORF PSC')
+                    cdss_not_found_tmp, sorfs_not_found = s_orf.search_pscs(sorfs_not_found)
+                    sorf_pscs_psccs.extend(cdss_not_found_tmp)
+                    print(f'\tfound PSCs: {len(sorf_pscs_psccs)}')
+                else:
+                    log.debug('search sORF PSCC')
+                    sorf_psccs, sorfs_not_found = s_orf.search_psccs(sorfs_not_found)
+                    sorf_pscs_psccs.extend(sorf_psccs)
+                    print(f'\tfound PSCCs: {len(sorf_pscs_psccs)}')
 
-
-        print("\tlookup annotations...")
-        log.debug('lookup sORF PSCs')
-        sorf_pscs_psccs.extend(sorf_ipss)
-        psc.lookup(sorf_pscs_psccs)  # lookup PSC info
-        log.debug('lookup sORF PSCCs')
-        pscc.lookup(sorf_pscs_psccs)  # lookup PSC info
-        print('\tfilter and combine annotations...')
-        log.debug('filter sORF by annotations')
-        sorfs_filtered = s_orf.annotation_filter(sorfs)
-        log.debug('combine sORF annotations')
-        for feat in sorfs_filtered:
-            anno.combine_annotation(feat)  # combine IPS and PSC annotations
-        data['features'].extend(sorfs_filtered)
-        print(f'\tfiltered sORFs: {len(sorfs_filtered)}')
+            print("\tlookup annotations...")
+            log.debug('lookup sORF PSCs')
+            sorf_pscs_psccs.extend(sorf_ipss)
+            psc.lookup(sorf_pscs_psccs)  # lookup PSC info
+            log.debug('lookup sORF PSCCs')
+            pscc.lookup(sorf_pscs_psccs)  # lookup PSC info
+            print('\tfilter and combine annotations...')
+            log.debug('filter sORF by annotations')
+            sorfs_filtered = s_orf.annotation_filter(sorfs)
+            log.debug('combine sORF annotations')
+            for feat in sorfs_filtered:
+                anno.combine_annotation(feat)  # combine IPS and PSC annotations
+            data['features'].extend(sorfs_filtered)
+            print(f'\tfiltered sORFs: {len(sorfs_filtered)}')
 
     ############################################################################
     # gap annotation
@@ -539,34 +549,49 @@ def main():
     cfg.run_end = datetime.now()  # measure runtime
 
     print(f'\nExport annotation results to: {cfg.output_path}')
-    print('\thuman readable TSV...')
-    tsv_path = cfg.output_path.joinpath(f'{cfg.prefix}.tsv')
-    tsv.write_features(data['sequences'], features_by_sequence, tsv_path)
+    if(cfg.mag_quality_mode):
+        print('\tskip human readable TSV in mag-quality mode...')
+    else:
+        print('\thuman readable TSV...')
+        tsv_path = cfg.output_path.joinpath(f'{cfg.prefix}.tsv')
+        tsv.write_features(data['sequences'], features_by_sequence, tsv_path)
 
     print('\tGFF3...')
     gff3_path = cfg.output_path.joinpath(f'{cfg.prefix}.gff3')
     gff.write_features(data, features_by_sequence, gff3_path)
 
-    print('\tINSDC GenBank & EMBL...')
-    genbank_path = cfg.output_path.joinpath(f'{cfg.prefix}.gbff')
-    embl_path = cfg.output_path.joinpath(f'{cfg.prefix}.embl')
-    insdc.write_features(data, features, genbank_path, embl_path)
+    if(cfg.mag_quality_mode):
+        print('\tskip INSDC GenBank & EMBL in mag-quality mode...')
+    else:
+        print('\tINSDC GenBank & EMBL...')
+        genbank_path = cfg.output_path.joinpath(f'{cfg.prefix}.gbff')
+        embl_path = cfg.output_path.joinpath(f'{cfg.prefix}.embl')
+        insdc.write_features(data, features, genbank_path, embl_path)
 
-    print('\tgenome sequences...')
-    fna_path = cfg.output_path.joinpath(f'{cfg.prefix}.fna')
-    fasta.export_sequences(data['sequences'], fna_path, description=True, wrap=True)
+    if(cfg.mag_quality_mode):
+        print('\tskip genome FASTA export in mag-quality mode...')
+    else:
+        print('\tgenome sequences...')
+        fna_path = cfg.output_path.joinpath(f'{cfg.prefix}.fna')
+        fasta.export_sequences(data['sequences'], fna_path, description=True, wrap=True)
 
-    print('\tfeature nucleotide sequences...')
-    ffn_path = cfg.output_path.joinpath(f'{cfg.prefix}.ffn')
-    fasta.write_ffn(features, ffn_path)
+    if(cfg.mag_quality_mode):
+        print('\tskip feature nucleotide FASTA export in mag-quality mode...')
+    else:
+        print('\tfeature nucleotide sequences...')
+        ffn_path = cfg.output_path.joinpath(f'{cfg.prefix}.ffn')
+        fasta.write_ffn(features, ffn_path)
 
     print('\ttranslated CDS sequences...')
     faa_path = cfg.output_path.joinpath(f'{cfg.prefix}.faa')
     fasta.write_faa(features, faa_path)
 
-    print('\tfeature inferences...')
-    tsv_path = cfg.output_path.joinpath(f'{cfg.prefix}.inference.tsv')
-    tsv.write_feature_inferences(data['sequences'], features_by_sequence, tsv_path)
+    if(cfg.mag_quality_mode):
+        print('\tskip feature inferences in mag-quality mode...')
+    else:
+        print('\tfeature inferences...')
+        tsv_path = cfg.output_path.joinpath(f'{cfg.prefix}.inference.tsv')
+        tsv.write_feature_inferences(data['sequences'], features_by_sequence, tsv_path)
 
     if(cfg.skip_plot  or  cfg.meta):
         print('\tskip generation of circular genome plot...')
@@ -574,7 +599,7 @@ def main():
         print('\tcircular genome plot...')
         plot.write(data, features, cfg.output_path)
 
-    if(cfg.skip_cds is False):
+    if(cfg.skip_cds is False and not cfg.mag_quality_mode):
         hypotheticals = [feat for feat in features if feat['type'] == bc.FEATURE_CDS and 'hypothetical' in feat]
         print('\thypothetical TSV...')
         tsv_path = cfg.output_path.joinpath(f'{cfg.prefix}.hypotheticals.tsv')

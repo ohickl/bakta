@@ -99,6 +99,12 @@ def parse_arguments():
     arg_group_annotation.add_argument('--hmms', action='store', default=None, dest='hmms', help='HMM file of trusted hidden markov models in HMMER format for CDS annotation')
     arg_group_annotation.add_argument('--meta', action='store_true', help='Run in metagenome mode. This only affects CDS prediction.')
     arg_group_annotation.add_argument('--partial', action='store_true', help='Predict partial (truncated) genes spanning linear sequence ends')
+    arg_group_annotation.add_argument(
+        '--mag-quality-mode',
+        action='store_true',
+        dest='mag_quality_mode',
+        help='Lean MAG-quality mode: keep structural predictions and minimal outputs while skipping expensive CDS/sORF annotation searches.',
+    )
 
     arg_group_workflow = parser.add_argument_group('Workflow')
     arg_group_workflow.add_argument('--skip-trna', action='store_true', dest='skip_trna', help='Skip tRNA detection & annotation')
@@ -238,24 +244,27 @@ def test_dependencies():
 
     if(cfg.skip_cds is not None and cfg.skip_cds is False):
         test_dependency(DEPENDENCY_PYRODIGAL)
-        test_dependency(DEPENDENCY_AMRFINDERPLUS)
+        test_dependency(DEPENDENCY_PYHMMER)
+        if(not cfg.mag_quality_mode):
+            test_dependency(DEPENDENCY_AMRFINDERPLUS)
 
-        # test if AMRFinderPlus db is installed
-        amrfinderplus_db_path = cfg.db_path.joinpath('amrfinderplus-db')
-        amrfinderplus_db_latest_path = amrfinderplus_db_path.joinpath('latest')
-        process = sp.run(
-            [
-                'amrfinder',
-                '--debug',
-                '--database', str(amrfinderplus_db_latest_path)
-            ], capture_output=True)
-        if('No valid AMRFinder database found' in process.stderr.decode()):
-            log.error('AMRFinderPlus database not installed')
-            sys.exit(f"ERROR: AMRFinderPlus database not installed! Please, install AMRFinderPlus's internal database by executing: 'amrfinder_update --database {amrfinderplus_db_path}'. This must be done only once.")
+            # test if AMRFinderPlus db is installed
+            amrfinderplus_db_path = cfg.db_path.joinpath('amrfinderplus-db')
+            amrfinderplus_db_latest_path = amrfinderplus_db_path.joinpath('latest')
+            process = sp.run(
+                [
+                    'amrfinder',
+                    '--debug',
+                    '--database', str(amrfinderplus_db_latest_path)
+                ], capture_output=True)
+            if('No valid AMRFinder database found' in process.stderr.decode()):
+                log.error('AMRFinderPlus database not installed')
+                sys.exit(f"ERROR: AMRFinderPlus database not installed! Please, install AMRFinderPlus's internal database by executing: 'amrfinder_update --database {amrfinderplus_db_path}'. This must be done only once.")
 
     if((cfg.skip_cds is not None and cfg.skip_cds is False) or (cfg.skip_sorf is not None and cfg.skip_sorf is False)):
         test_dependency(DEPENDENCY_PYHMMER)
-        test_dependency(DEPENDENCY_DIAMOND)
+        if(not cfg.mag_quality_mode):
+            test_dependency(DEPENDENCY_DIAMOND)
 
     if(cfg.skip_ori is not None and cfg.skip_ori is False):
         test_dependency(DEPENDENCY_BLASTN)

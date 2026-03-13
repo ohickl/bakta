@@ -59,6 +59,7 @@ user_proteins = None
 user_hmms = None
 meta = None
 partial = None
+mag_quality_mode = None
 regions = None
 
 # workflow configuration
@@ -166,7 +167,7 @@ def setup(args):
         taxon = None
 
     # annotation configurations
-    global complete, prodigal_tf, translation_table, keep_sequence_headers, locus, locus_tag, locus_tag_increment, gram, replicons, compliant, user_proteins, user_hmms, meta, partial, regions
+    global complete, prodigal_tf, translation_table, keep_sequence_headers, locus, locus_tag, locus_tag_increment, gram, replicons, compliant, user_proteins, user_hmms, meta, partial, mag_quality_mode, regions
     complete = args.complete
     log.info('complete=%s', complete)
     prodigal_tf = args.prodigal_tf
@@ -195,6 +196,8 @@ def setup(args):
     log.info('meta=%s', meta)
     partial = args.partial
     log.info('partial=%s', partial)
+    mag_quality_mode = args.mag_quality_mode
+    log.info('mag_quality_mode=%s', mag_quality_mode)
     locus = args.locus
     if(locus is not None):
         if(locus == ''):
@@ -298,6 +301,11 @@ def setup(args):
     log.info('skip-filter=%s', skip_filter)
     skip_plot = args.skip_plot
     log.info('skip-plot=%s', skip_plot)
+    if(mag_quality_mode):
+        skip_pseudo = True
+        skip_ori = True
+        skip_plot = True
+        log.info('mag_quality_mode enabled: force skip-pseudo=%s skip-ori=%s skip-plot=%s', skip_pseudo, skip_ori, skip_plot)
 
 
 def check_readability(file_name: str, file_Path: Path):
