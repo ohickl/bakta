@@ -5,12 +5,12 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from Bio import SeqIO
+from xopen import xopen
+
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.features.orf as orf
-
-from Bio import SeqIO
-from xopen import xopen
 
 
 log = logging.getLogger('EXPERT_AA_SEQ')
@@ -26,8 +26,9 @@ def search(cdss: Sequence[dict], cds_fasta_path: Path, expert_system: str, db_pa
         '--db', str(db_path),
         '--out', str(diamond_output_path),
         '--max-target-seqs', '1',  # single best output
-        '--outfmt', '6', 'qseqid', 'sseqid', 'slen', 'length', 'pident', 'evalue', 'bitscore', 'stitle',
+        '--outfmt', '6', 'qseqid', 'sseqid', 'qlen', 'slen', 'length', 'pident', 'evalue', 'bitscore', 'stitle',
         '--threads', str(cfg.threads),
+        '--load-threads', str(min(cfg.threads, 8)),  # limit load threads to max 8
         '--tmpdir', str(cfg.tmp_path),  # use tmp folder
         '--block-size', '4',  # increase block size for faster executions
         '--index-chunks', '1',  # set index chunks to 1 for faster executions
@@ -51,13 +52,13 @@ def search(cdss: Sequence[dict], cds_fasta_path: Path, expert_system: str, db_pa
     cds_by_hexdigest = orf.get_orf_dictionary(cdss)
     with diamond_output_path.open() as fh:
         for line in fh:
-            (aa_identifier, model_id, model_length, alignment_length, identity, evalue, bitscore, model_title) = line.strip().split('\t')
+            (aa_identifier, model_id, query_length, model_length, alignment_length, identity, evalue, bitscore, model_title) = line.strip().split('\t')
             cds = cds_by_hexdigest[aa_identifier]
             query_cov = int(alignment_length) / len(cds['aa'])
             model_cov = int(alignment_length) / int(model_length)
             identity = float(identity) / 100
-            evalue = float(evalue)
             bitscore = float(bitscore)
+            evalue = float(evalue)
             (source, rank, min_identity, min_query_cov, min_model_cov, gene, product, dbxrefs) = model_title.split(' ', 1)[1].split('~~~')
             rank = int(rank)
             min_identity = float(min_identity) / 100
@@ -72,19 +73,19 @@ def search(cdss: Sequence[dict], cds_fasta_path: Path, expert_system: str, db_pa
                     'gene': gene if gene != '' else None,
                     'product': product,
                     'query_cov': query_cov,
-                    'model_cov': model_cov,
+                    'subject_cov': model_cov,
                     'identity': identity,
+                    'score': bitscore,
                     'evalue': evalue,
-                    'bitscore': bitscore,
                     'db_xrefs': [] if dbxrefs == '' else dbxrefs.split(',')
                 }
                 if(expert_system == 'user_proteins'):
-                    hit['db_xrefs'].append(f'UserProtein:{model_id}')
+                    hit['db_xrefs'].append(f'{bc.DB_XREF_USER_PROTEINS}:{model_id}')
                 cds.setdefault('expert', [])
                 cds['expert'].append(hit)
                 log.debug(
-                    'hit: source=%s, rank=%i, contig=%s, start=%i, stop=%i, strand=%s, query-cov=%0.3f, model-cov=%0.3f, identity=%0.3f, gene=%s, product=%s, evalue=%1.1e, bitscore=%f',
-                    source, rank, cds['contig'], cds['start'], cds['stop'], cds['strand'], query_cov, model_cov, identity, gene, product, evalue, bitscore
+                    'hit: source=%s, rank=%i, seq=%s, start=%i, stop=%i, strand=%s, query-cov=%0.3f, subject-cov=%0.3f, identity=%0.3f, score=%0.1f, evalue=%1.1e, gene=%s, product=%s',
+                    source, rank, cds['sequence'], cds['start'], cds['stop'], cds['strand'], query_cov, model_cov, identity, bitscore, evalue, gene, product
                 )
                 cds_found.add(aa_identifier)
 
@@ -93,11 +94,16 @@ def search(cdss: Sequence[dict], cds_fasta_path: Path, expert_system: str, db_pa
 
 
 def write_user_protein_sequences(aa_fasta_path: Path):
+    no_skipped_proteins = 0
     user_proteins = []
     try:
         with xopen(str(cfg.user_proteins), threads=0) as fh_in:
             for record in SeqIO.parse(fh_in, 'fasta'):
-                user_proteins.append(parse_user_protein_sequences_fasta(record))
+                try:
+                    user_protein = parse_user_protein_sequences_fasta(record)
+                    user_proteins.append(user_protein)
+                except ValueError:
+                    no_skipped_proteins += 1
     except Exception as e:
         log.error('provided user proteins file Fasta format not valid!', exc_info=True)
         sys.exit(f'ERROR: User proteins file Fasta format not valid!')
@@ -106,8 +112,13 @@ def write_user_protein_sequences(aa_fasta_path: Path):
         with xopen(str(cfg.user_proteins), threads=0) as fh_in:
             for record in SeqIO.parse(fh_in, 'genbank'):
                 for feature in record.features:
-                    if(feature.type.lower() == 'cds'  and  'pseudo' not in feature.qualifiers and  bc.INSDC_FEATURE_PSEUDOGENE not in feature.qualifiers):
-                        user_proteins.append(parse_user_protein_sequences_genbank(feature))
+                    if(feature.type.lower() == 'cds'  and  bc.INSDC_FEATURE_PSEUDO not in feature.qualifiers  and  bc.INSDC_FEATURE_PSEUDOGENE not in feature.qualifiers):
+                        try:
+                            user_protein = parse_user_protein_sequences_genbank(feature)
+                            user_proteins.append(user_protein)
+                        except ValueError:
+                            no_skipped_proteins += 1
+                            log.warning('skipped incorrectly formatted user protein!')
     except Exception as e:
         log.error('provided user proteins file GenBank format not valid!', exc_info=True)
         sys.exit(f'ERROR: User proteins file GenBank format not valid!')
@@ -117,7 +128,7 @@ def write_user_protein_sequences(aa_fasta_path: Path):
             with aa_fasta_path.open('w') as fh_out:
                 for user_protein in user_proteins:
                     (model_id, min_id, min_query_cov, min_model_cov, gene, product, dbxrefs, seq) = user_protein
-                    fh_out.write(f">{model_id} UserProteins~~~{100}~~~{min_id}~~~{min_query_cov}~~~{min_model_cov}~~~{gene}~~~{product}~~~{','.join(dbxrefs)}\n{seq}\n")
+                    fh_out.write(f">{model_id} UserProteins~~~{101}~~~{min_id}~~~{min_query_cov}~~~{min_model_cov}~~~{gene}~~~{product}~~~{','.join(dbxrefs)}\n{seq}\n")
                     log.debug(
                         'imported user aa: id=%s, length=%i, min-id=%f, min-query-cov=%f, min-model-cov=%f, gene=%s, product=%s, dbxrefs=%s',
                         model_id, len(seq), min_id, min_query_cov, min_model_cov, gene, product, dbxrefs
@@ -126,8 +137,9 @@ def write_user_protein_sequences(aa_fasta_path: Path):
             log.error('cannot write user protein file!', exc_info=True)
             sys.exit(f'ERROR: Cannot write user protein file!')
     else:
-        log.error('no user proteins detected!', exc_info=True)
-        sys.exit(f'ERROR: No user proteins detected in file!')
+        log.warning('no valid user proteins detected!', exc_info=True)
+
+    return (len(user_proteins), no_skipped_proteins)
 
 
 def parse_user_protein_sequences_fasta(record):
@@ -153,22 +165,19 @@ def parse_user_protein_sequences_fasta(record):
         if(cols[5] != ''):
             db_xrefs = cols[5].split(',')
     else:
-        log.error(
-            'wrong description format in Fasta user protein file! description=%s',
-            record.description
-        )
-        raise ValueError(f'Wrong description format in Fasta user protein file! description={record.description}')
+        log.warning('wrong description format in FASTA user protein file! id=%s, description=%s', record.id, record.description)
+        raise ValueError(f'Wrong description format in FASTA user protein file!')
 
     gene = gene.strip()
     product = product.strip()
     if(product == ''):
-        log.error('missing product in Fasta user protein file!')
-        raise ValueError('Missing product in Fasta user protein file!')
+        log.warning('missing product in FASTA user protein file! id=%s, description=%s', record.id, record.description)
+        raise ValueError('Missing product in FASTA user protein file!')
 
     for db_xref in db_xrefs:
         if(':' not in db_xref):
-            log.error('wrong dbxref format in Fasta user protein file!')
-            raise ValueError(f'Wrong dbxref format in Fasta user protein file! dbxref={db_xref}')
+            log.warning('wrong dbxref format in FASTA user protein file! id=%s, dbxref=%s', record.id, db_xref)
+            raise ValueError(f'Wrong dbxref format in FASTA user protein file!')
     seq = str(record.seq).upper()
     return (model_id, min_id, min_query_cov, min_model_cov, gene, product, db_xrefs, seq)
 
@@ -182,7 +191,7 @@ def parse_user_protein_sequences_genbank(feature: dict):
     model_ids = q.get('locus_tag', [])
     model_id = model_ids[0] if len(model_ids) > 0 else None
     if(model_id is None):
-        log.error('missing locus_tag in GenBank user protein file!')
+        log.warning('missing locus_tag in GenBank user protein file!')
         raise ValueError('Missing locus_tag in GenBank user protein file!')
 
     genes = q.get('gene', [])
@@ -191,13 +200,13 @@ def parse_user_protein_sequences_genbank(feature: dict):
     products = q.get('product', [])
     product = products[0].strip() if len(products) > 0 else None
     if(product is None or product == ''):
-        log.error('missing product in GenBank user protein file!')
+        log.warning('missing product in GenBank user protein file!')
         raise ValueError('Missing product in GenBank user protein file!')
 
     db_xrefs = q.get('db_xref', [])
     for db_xref in db_xrefs:
         if(':' not in db_xref):
-            log.error('wrong dbxref format in Fasta user protein file!')
+            log.warning('wrong dbxref format in Fasta user protein file! dbxref=%s', db_xref)
             raise ValueError(f'Wrong dbxref format in Fasta user protein file! dbxref={db_xref}')
     ecs = q.get('EC_number', [])
     for ec in ecs:
@@ -206,7 +215,7 @@ def parse_user_protein_sequences_genbank(feature: dict):
     seqs = q.get('translation', [])
     seq = str(seqs[0]).upper() if len(seqs) > 0 else None
     if(seq is None):
-        log.error('missing sequence translation in GenBank user protein file!')
+        log.warning('missing sequence translation in GenBank user protein file!')
         raise ValueError('Missing sequence translation in GenBank user protein file!')
 
     return (model_id, min_id, min_query_cov, min_model_cov, gene, product, db_xrefs, seq)

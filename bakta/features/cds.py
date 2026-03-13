@@ -1,6 +1,7 @@
 import concurrent.futures as cf
 import copy
 import logging
+import re
 import subprocess as sp
 import sys
 import xml.etree.ElementTree as ET
@@ -11,8 +12,10 @@ from pathlib import Path
 
 import pyrodigal
 import pyhmmer
+from pyhmmer.easel import AA, DigitalSequenceBlock, TextSequenceBlock, TextSequence
 
 from Bio import SeqIO
+from Bio import SeqFeature
 from Bio.Seq import Seq
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 from xopen import xopen
@@ -26,22 +29,25 @@ import bakta.so as so
 from bakta.psc import DB_PSC_COL_UNIREF90
 
 
+RE_CHROM_ROTATION_GENE = re.compile(r'dna[A]', re.IGNORECASE)
+RE_PLASMID_ROTATION_GENE = re.compile(r'rep[ABC]|par[AB]', re.IGNORECASE)
+
+
 log = logging.getLogger('CDS')
 
-
-def predict(genome: dict):
+def predict(data: dict):
     """Predict open reading frames with Pyrodigal."""
     # create Pyrodigal trainining file if not provided by the user
     prodigal_tf_path = cfg.prodigal_tf
     trainings_info = None
-    prodigal_metamode = cfg.meta  or  genome['size'] < pyrodigal.MIN_SINGLE_GENOME  # 20_000 bp
+    prodigal_metamode = cfg.meta  or  data['stats']['size'] < pyrodigal.MIN_SINGLE_GENOME  # 20_000 bp
     log.debug('prodigal mode: meta=%s', prodigal_metamode)
     if(prodigal_tf_path is None):
-        closed = not genome['complete']
+        closed = not data['genome']['complete']
         if(not prodigal_metamode):
             log.info('create prodigal training info object: meta=%s, closed=%s', prodigal_metamode, closed)
             gene_finder = pyrodigal.GeneFinder(meta=prodigal_metamode, closed=closed)
-            seqs = [c['sequence'] for c in genome['contigs']]
+            seqs = [seq['nt'] for seq in data['sequences']]
             trainings_info = gene_finder.train(*seqs, translation_table=cfg.translation_table)
         else:
             log.info('skip creation of prodigal training info object: meta=%s, closed=%s', prodigal_metamode, closed)
@@ -57,61 +63,67 @@ def predict(genome: dict):
 
     cdss = []
     # predict genes on linear sequences
-    linear_contigs = [c for c in genome['contigs'] if c['topology'] == bc.TOPOLOGY_LINEAR]
-    if(len(linear_contigs) > 0):
+    linear_sequences = [seq for seq in data['sequences'] if seq['topology'] == bc.TOPOLOGY_LINEAR]
+    if(len(linear_sequences) > 0):
+        prodigal_closed = not cfg.partial  # allow partial genes at contig ends at user's request
         if prodigal_metamode:
-            gene_finder = pyrodigal.GeneFinder(meta=True, metagenomic_bins=None, closed=True, mask=True)
+            gene_finder = pyrodigal.GeneFinder(meta=True, metagenomic_bins=None, closed=prodigal_closed, mask=True)
         else:
-            gene_finder = pyrodigal.GeneFinder(trainings_info, meta=False, closed=True, mask=True)
-        sequences = [contig['sequence'] for contig in linear_contigs]
+            gene_finder = pyrodigal.GeneFinder(trainings_info, meta=False, closed=prodigal_closed, mask=True)
+        sequences = [seq['nt'] for seq in linear_sequences]
         with cf.ThreadPoolExecutor(max_workers=cfg.threads) as tpe:
-            for contig, genes in zip(linear_contigs, tpe.map(gene_finder.find_genes, sequences)):
-                cdss_per_sequence = create_cdss(genes, contig)
+            for seq, genes in zip(linear_sequences, tpe.map(gene_finder.find_genes, sequences)):
+                cdss_per_sequence = create_cdss(genes, seq)
                 cdss.extend(cdss_per_sequence)
 
     # predict genes on circular replicons (chromosomes/plasmids)
-    circular_contigs = [c for c in genome['contigs'] if c['topology'] == bc.TOPOLOGY_CIRCULAR]
-    if(len(circular_contigs) > 0):
+    circular_sequences = [seq for seq in data['sequences'] if seq['topology'] == bc.TOPOLOGY_CIRCULAR]
+    if(len(circular_sequences) > 0):
         if prodigal_metamode:
             gene_finder = pyrodigal.GeneFinder(meta=True, metagenomic_bins=None, closed=False, mask=True)
         else:
             gene_finder = pyrodigal.GeneFinder(trainings_info, meta=False, closed=False, mask=True)
-        sequences = [contig['sequence'] for contig in circular_contigs]
+        sequences = [seq['nt'] for seq in circular_sequences]
         with cf.ThreadPoolExecutor(max_workers=cfg.threads) as tpe:
-            for contig, genes in zip(circular_contigs, tpe.map(gene_finder.find_genes, sequences)):
-                cdss_per_sequence = create_cdss(genes, contig)
+            for seq, genes in zip(circular_sequences, tpe.map(gene_finder.find_genes, sequences)):
+                cdss_per_sequence = create_cdss(genes, seq)
                 cdss.extend(cdss_per_sequence)
 
     log.info('predicted=%i', len(cdss))
     return cdss
 
 
-def create_cds(contig: dict, start: int, stop: int, strand: str, nt: str, aa: str):
+def create_cds(sequence: dict, start: int, stop: int, strand: str, edge:bool, nt: str, aa: str):
     cds = OrderedDict()
     cds['type'] = bc.FEATURE_CDS
-    cds['contig'] = contig['id']
+    cds['sequence'] = sequence['id']
     cds['start'] = start
     cds['stop'] = stop
     cds['strand'] = strand
-    cds['frame'] = (start - 1) % 3 + 1 if strand == bc.STRAND_FORWARD else (contig['length'] - stop) % 3 + 1
+    cds['frame'] = (start - 1) % 3 + 1 if strand == bc.STRAND_FORWARD else (sequence['length'] - stop) % 3 + 1
     cds['gene'] = None
     cds['product'] = None
     cds['db_xrefs'] = [so.SO_CDS.id]
     cds['nt'] = nt
     cds['aa'] = aa
     cds['aa_digest'], cds['aa_hexdigest'] = bu.calc_aa_hash(aa)
+    if(edge):
+        cds['edge'] = True
     return cds
 
 
-def create_cdss(genes, contig):
+def create_cdss(genes, sequence):
     partial_cdss_per_sequence = []
     cdss_per_sequence = []
     for gene in genes:
         strand = bc.STRAND_FORWARD if gene.strand == 1 else bc.STRAND_REVERSE
-        cds = create_cds(contig, gene.begin, gene.end, strand, '', '')
+        cds = create_cds(sequence, gene.begin, gene.end, strand, False, '', '')
         cds['start_type'] = gene.start_type
         cds['rbs_motif'] = gene.rbs_motif
-        if gene.partial_begin:
+        if gene.partial_begin  and  gene.partial_end:
+            cds['truncated'] = bc.FEATURE_END_BOTH
+            partial_cdss_per_sequence.append(cds)
+        elif gene.partial_begin:
             cds['truncated'] = bc.FEATURE_END_5_PRIME if cds['strand'] == bc.STRAND_FORWARD else bc.FEATURE_END_3_PRIME
             partial_cdss_per_sequence.append(cds)
         elif gene.partial_end:
@@ -126,24 +138,24 @@ def create_cdss(genes, contig):
         else:
             aa = gene.translate(translation_table=cfg.translation_table).upper()
         
-        if('truncated' not in cds or cds['truncated'] == bc.FEATURE_END_5_PRIME):
+        if(aa[-1] == '*'):
             aa = aa[:-1]  # discard trailing asterisk
         cds['aa'] = aa
         cds['aa_digest'], cds['aa_hexdigest'] = bu.calc_aa_hash(aa)
         
         log.info(
-            'contig=%s, start=%i, stop=%i, strand=%s, frame=%s, truncated=%s, start-type=%s, RBS-motif=%s',
-            cds['contig'], cds['start'], cds['stop'], cds['strand'], cds['frame'], cds.get('truncated', 'no'), cds['start_type'], cds['rbs_motif']
+            'seq=%s, start=%i, stop=%i, strand=%s, frame=%s, truncated=%s, start-type=%s, RBS-motif=%s',
+            cds['sequence'], cds['start'], cds['stop'], cds['strand'], cds['frame'], cds.get('truncated', 'no'), cds['start_type'], cds['rbs_motif']
         )
-    if(contig['topology'] == bc.TOPOLOGY_CIRCULAR and len(partial_cdss_per_sequence) >= 2):
-        first_partial_cds = partial_cdss_per_sequence[0]  # first partial CDS per contig
-        last_partial_cds = partial_cdss_per_sequence[-1]  # last partial CDS per contig
+    if(sequence['topology'] == bc.TOPOLOGY_CIRCULAR and len(partial_cdss_per_sequence) >= 2):
+        first_partial_cds = partial_cdss_per_sequence[0]  # first partial CDS per sequence
+        last_partial_cds = partial_cdss_per_sequence[-1]  # last partial CDS per sequence
         # check if partial CDSs are on same strand and have opposite truncated edges
-        # and first starts at 1 and last ends at contig end (length)
+        # and first starts at 1 and last ends at sequence end (length)
         if(first_partial_cds['strand'] == last_partial_cds['strand']
             and first_partial_cds['truncated'] != last_partial_cds['truncated']
             and first_partial_cds['start'] == 1
-            and last_partial_cds['stop'] == contig['length']):
+            and last_partial_cds['stop'] == sequence['length']):
             cds = last_partial_cds
             cds['stop'] = first_partial_cds['stop']
             if(last_partial_cds['truncated'] == bc.FEATURE_END_3_PRIME):
@@ -159,34 +171,52 @@ def create_cdss(genes, contig):
             cds['aa_digest'], cds['aa_hexdigest'] = bu.calc_aa_hash(aa)
             cdss_per_sequence.append(cds)
             log.info(
-                'edge CDS: contig=%s, start=%i, stop=%i, strand=%s, frame=%s, start-type=%s, RBS-motif=%s, aa-hexdigest=%s, aa=[%s..%s]',
-                cds['contig'], cds['start'], cds['stop'], cds['strand'], cds['frame'], cds['start_type'], cds['rbs_motif'], cds['aa_hexdigest'], aa[:10], aa[-10:]
+                'edge CDS: seq=%s, start=%i, stop=%i, strand=%s, frame=%s, start-type=%s, RBS-motif=%s, aa-hexdigest=%s, aa=[%s..%s]',
+                cds['sequence'], cds['start'], cds['stop'], cds['strand'], cds['frame'], cds['start_type'], cds['rbs_motif'], cds['aa_hexdigest'], aa[:10], aa[-10:]
             )
             partial_cdss_per_sequence = partial_cdss_per_sequence[1:-1]  # remove first/last partial CDS
     for partial_cds in partial_cdss_per_sequence:
         cdss_per_sequence.append(partial_cds)
         log.info(
-            'truncated CDS: contig=%s, start=%i, stop=%i, strand=%s, frame=%s, truncated=%s, start-type=%s, RBS-motif=%s, aa-hexdigest=%s, aa=[%s..%s]',
-            partial_cds['contig'], partial_cds['start'], partial_cds['stop'], partial_cds['strand'], partial_cds['frame'], partial_cds['truncated'], partial_cds['start_type'], partial_cds['rbs_motif'], partial_cds['aa_hexdigest'], partial_cds['aa'][:10], partial_cds['aa'][-10:]
+            'truncated CDS: seq=%s, start=%i, stop=%i, strand=%s, frame=%s, truncated=%s, start-type=%s, RBS-motif=%s, aa-hexdigest=%s, aa=[%s..%s]',
+            partial_cds['sequence'], partial_cds['start'], partial_cds['stop'], partial_cds['strand'], partial_cds['frame'], partial_cds['truncated'], partial_cds['start_type'], partial_cds['rbs_motif'], partial_cds['aa_hexdigest'], partial_cds['aa'][:10], partial_cds['aa'][-10:]
         )
     for cds in cdss_per_sequence:  # extract nt sequences
-        nt = bu.extract_feature_sequence(cds, contig)
+        nt = bu.extract_feature_sequence(cds, sequence)
         cds['nt'] = nt
         log.info(
-            'contig=%s, start=%i, stop=%i, strand=%s, nt=[%s..%s]',
-            cds['contig'], cds['start'], cds['stop'], cds['strand'], nt[:10], nt[-10:]
+            'seq=%s, start=%i, stop=%i, strand=%s, nt=[%s..%s]',
+            cds['sequence'], cds['start'], cds['stop'], cds['strand'], nt[:10], nt[-10:]
         )
     return cdss_per_sequence
 
 
-def import_user_cdss(genome: dict, import_path: Path):
+def filter_length(cdss: Sequence[dict]) -> Sequence[dict]:
+    """Filter CDS features by length."""
+    discarded_cdss = []
+    for cds in cdss:
+        if(len(cds['nt']) > bc.CDS_MAX_LENGTH):
+            discard = OrderedDict()
+            discard['type'] = bc.DISCARD_TYPE_LENGTH
+            discard['description'] = f'Predicted CDS length over suspicious length threshold ({bc.CDS_MAX_LENGTH} bp)'
+            cds['discarded'] = discard
+            discarded_cdss.append(cds)
+            log.info(
+                'discard spurious length: seq=%s, start=%i, stop=%i, strand=%s',
+                cds['sequence'], cds['start'], cds['stop'], cds['strand']
+            )
+    log.info('discarded=%i', len(discarded_cdss))
+    return discarded_cdss
+
+
+def import_user_cdss(data: dict, import_path: Path):
     """Import user-provided CDS regions.
     Only CDS region information are imported skipping any existing functional annotations.
     
     Parameters
     ----------
-    genome : dict
-        Genome dictionary holding sequence information (contigs)
+    data : dict
+        data dictionary holding sequence information
     import_path : Path
         Path to GFF3 or Genbank file with regions or features.
 
@@ -196,12 +226,13 @@ def import_user_cdss(genome: dict, import_path: Path):
         a list of CDS features - without functional annotations.
     """
     user_cdss = []
-    if(cfg.keep_contig_headers):
-        contigs_by_id = {c['id']: c for c in genome['contigs']}  # use ID as it's not altered -> no 'orig_id' field
+    no_skipped_features = 0
+    if(cfg.keep_sequence_headers):
+        sequences_by_id = {seq['id']: seq for seq in data['sequences']}  # use ID as it's not altered -> no 'orig_id' field
     else:
-        contigs_by_id = {c['orig_id']: c for c in genome['contigs']}  # use 'orig_id' instead of autogenerated new 'id'
-    file_suffix = import_path.suffix.lower()
-    if(file_suffix in ['.gff', '.gff3']):  # parse GFF3 format
+        sequences_by_id = {seq['orig_id']: seq for seq in data['sequences']}  # use 'orig_id' instead of autogenerated new 'id'
+    file_suffices = [suffix.lower() for suffix in import_path.suffixes]
+    if(any(map(lambda suffix: suffix in ['.gff', '.gff3'], file_suffices))):  # parse GFF3 format
         try:
             with xopen(str(import_path), threads=0) as fh_in:
                 skip_lines = False
@@ -212,75 +243,160 @@ def import_user_cdss(genome: dict, import_path: Path):
                     elif(skip_lines  or  line[0] == '#'):
                         continue
                     else:
-                        contig_id, tool, feature_type, start, stop, score, strand, phase, attributes = line.split('\t')
+                        sequence_id, tool, feature_type, start, stop, score, strand, phase, attributes = line.split('\t')
                         if(feature_type.lower() == 'cds'):
-                            contig = contigs_by_id.get(contig_id, None)
-                            if(contig is None):
-                                log.error('user-provided CDS: No contig found for id=%s', contig_id)
-                                raise Exception(f'user-provided CDS: No contig found for id={contig_id}')
-                            user_cds = create_cds(contig, int(start), int(stop), strand, '', '')
+                            attributes = attributes.lower().split(';')
+                            seq = sequences_by_id.get(sequence_id, None)
+                            if(seq is None):
+                                log.error('user-provided CDS: No seq found for id=%s', sequence_id)
+                                raise Exception(f'user-provided CDS: No sequence found for id={sequence_id}')
+                            edge = False
+                            start = int(start)
+                            stop = int(stop)
+                            if(stop > seq['length']):  # check for features spanning sequence edges
+                                stop = stop - seq['length']
+                                edge = True
+                                
+                            user_cds = create_cds(seq, start, stop, strand, edge, '', '')
                             user_cds['source'] = bc.CDS_SOURCE_USER
+                            if('pseudo=' in attributes  or  bc.INSDC_FEATURE_PSEUDOGENE in attributes):  # skip pseudo genes
+                                log.debug(
+                                    'skip user-provided CDS: reason=pseudogene seq=%s, start=%i, stop=%i, strand=%s',
+                                    user_cds['sequence'], user_cds['start'], user_cds['stop'], user_cds['strand']
+                                )
+                                continue
                             try:
-                                nt = bu.extract_feature_sequence(user_cds, contig)
+                                nt = bu.extract_feature_sequence(user_cds, seq)
                                 user_cds['nt'] = nt
                             except:
-                                log.error('user-provided CDS out of range! contig=%s, start=%i, stop=%i', user_cds['contig'], user_cds['start'], user_cds['stop'])
-                                raise ValueError(f"User-provided CDS out of range! contig={user_cds['contig']}, start={user_cds['start']}, stop={user_cds['stop']}")
+                                log.error('user-provided CDS out of range! seq=%s, start=%i, stop=%i', user_cds['sequence'], user_cds['start'], user_cds['stop'])
+                                raise ValueError(f"User-provided CDS out of range! sequence={user_cds['sequence']}, start={user_cds['start']}, stop={user_cds['stop']}")
                             try:
-                                aa = str(Seq(nt).translate(table=cfg.translation_table, cds=True))
+                                try:
+                                    aa = str(Seq(nt).translate(table=cfg.translation_table, cds=True))
+                                except:  # skip uncommon translations
+                                    log.warning('user-provided CDS: CDS could not be translated into a valid amino acid sequence! seq=%s, start=%i, stop=%i, strand=%s, edge=%s, cds=%s', user_cds['sequence'], user_cds['start'], user_cds['stop'], user_cds['strand'], user_cds.get('edge', False), nt)
+                                    no_skipped_features += 1
+                                    continue
                                 user_cds['aa'] = aa
                                 user_cds['aa_digest'], user_cds['aa_hexdigest'] = bu.calc_aa_hash(aa)
                             except:
-                                log.error('user-provided CDS could not be translated into a valid amino acid sequence! contig=%s, start=%i, stop=%i, cds=%s', user_cds['contig'], user_cds['start'], user_cds['stop'], nt)
-                                raise ValueError(f"User-provided CDS could not be translated into a valid amino acid sequence! contig={user_cds['contig']}, start={user_cds['start']}, stop={user_cds['stop']}, cds={nt}")
+                                log.error('user-provided CDS could not be translated into a valid amino acid sequence! seq=%s, start=%i, stop=%i, cds=%s', user_cds['sequence'], user_cds['start'], user_cds['stop'], nt)
+                                raise ValueError(f"User-provided CDS could not be translated into a valid amino acid sequence! sequence={user_cds['sequence']}, start={user_cds['start']}, stop={user_cds['stop']}, cds={nt}")
                             
                             log.info(
-                                'user-provided CDS: contig=%s, start=%i, stop=%i, strand=%s, nt=[%s..%s], aa=[%s..%s]',
-                                user_cds['contig'], user_cds['start'], user_cds['stop'], user_cds['strand'], nt[:10], nt[-10:], aa[:10], aa[-10:]
+                                'user-provided CDS: seq=%s, start=%i, stop=%i, strand=%s, nt=[%s..%s], aa=[%s..%s]',
+                                user_cds['sequence'], user_cds['start'], user_cds['stop'], user_cds['strand'], nt[:10], nt[-10:], aa[:10], aa[-10:]
                             )
                             user_cdss.append(user_cds)
         except Exception as e:
             log.error('user-provided regions/features file GFF3 format not valid!', exc_info=True)
             sys.exit(f'ERROR: User-provided regions/features file GFF3 format not valid!')
-    elif(file_suffix in ['.gb', '.genbank', '.gbk', '.gbff']):  # parse GenBank format
+    elif(any(map(lambda suffix: suffix in ['.gb', '.genbank', '.gbk', '.gbff'], file_suffices))):  # parse GenBank format
         try:
             with xopen(str(import_path), threads=0) as fh_in:
                 for record in SeqIO.parse(fh_in, 'genbank'):
                     for feature in record.features:
-                        if(feature.type.lower() == 'cds'  and  'pseudo' not in feature.qualifiers and  bc.INSDC_FEATURE_PSEUDOGENE not in feature.qualifiers):
-                            contig = contigs_by_id.get(record.id, None)
-                            if(contig is None):
-                                log.error('user-provided CDS: No contig found for id=%s', record.id)
-                                raise Exception(f'user-provided CDS: No contig found for id={record.id}')
-                            strand = bc.STRAND_FORWARD if feature.location.strand == +1 else bc.STRAND_REVERSE
-                            user_cds = create_cds(contig, feature.location.start + 1, feature.location.end, strand, '', '')
+                        if(feature.type.lower() == 'cds'):
+                            seq = sequences_by_id.get(record.id, None)
+                            if(seq is None):
+                                log.error('user-provided CDS: No seq found for id=%s', record.id)
+                                raise Exception(f'user-provided CDS: No sequence found for id={record.id}')
+                            if(feature.location.strand is None):  # weird mixed-stranded compound locations
+                                strand = bc.STRAND_UNKNOWN
+                            else:
+                                strand = bc.STRAND_FORWARD if feature.location.strand == +1 else bc.STRAND_REVERSE
+                            start = feature.location.start + 1
+                            end = feature.location.end
+                            edge = False
+                            if('<' in str(feature.location.start)  or  '>' in str(feature.location.end)):
+                                log.debug(
+                                    'skip user-provided CDS: reason=partial, seq=%s, start=%s, stop=%s, strand=%s',
+                                    seq['id'], feature.location.start, feature.location.end, strand
+                                )
+                                continue
+                            elif(bc.INSDC_FEATURE_PSEUDO in feature.qualifiers  or  bc.INSDC_FEATURE_PSEUDOGENE in feature.qualifiers):
+                                log.debug(
+                                    'skip user-provided CDS: reason=pseudo, seq=%s, start=%i, stop=%i, strand=%s',
+                                    seq['id'], feature.location.start, feature.location.end, strand
+                                )
+                                continue
+                            elif(isinstance(feature.location, SeqFeature.CompoundLocation)  and  len(feature.location.parts) == 2):
+                                strand = feature.location.strand
+                                if(strand != bc.STRAND_UNKNOWN):  # only accept equal strands -> edge features or compound locations 
+                                    strand = bc.STRAND_FORWARD if feature.location.strand == +1 else bc.STRAND_REVERSE
+                                    edge = None
+                                    edge_left, edge_right = feature.location.parts
+                                    if(strand == bc.STRAND_FORWARD):
+                                        start = edge_left.start + 1
+                                        end = edge_right.end
+                                    else:
+                                        start = edge_right.start + 1
+                                        end = edge_left.end
+                                    edge = start > end  # real edge feature -> otherwise compound location
+                            user_cds = create_cds(seq, start, end, strand, edge, '', '')
                             user_cds['source'] = bc.CDS_SOURCE_USER
                             try:
-                                nt = bu.extract_feature_sequence(user_cds, contig)
+                                nt = bu.extract_feature_sequence(user_cds, seq)
                                 user_cds['nt'] = nt
                             except:
-                                log.error('user-provided CDS: CDS out of range! contig=%s, start=%i, stop=%i', user_cds['contig'], user_cds['start'], user_cds['stop'])
-                                raise ValueError(f"User-provided CDS out of range! contig={user_cds['contig']}, start={user_cds['start']}, stop={user_cds['stop']}")
+                                log.error('user-provided CDS: CDS out of range! seq=%s, start=%i, stop=%i', user_cds['sequence'], user_cds['start'], user_cds['stop'])
+                                raise ValueError(f"User-provided CDS out of range! sequence={user_cds['sequence']}, start={user_cds['start']}, stop={user_cds['stop']}")
                             try:
-                                aa = str(Seq(nt).translate(table=cfg.translation_table, cds=True))
+                                if('ribosomal_slippage' in feature.qualifiers):  # import cases of ribosomal slippage
+                                    aa = str(feature.qualifiers['translation'][0])
+                                    user_cds['db_xrefs'].append(so.SO_TRANSLATIONAL_FRAMESHIFT.id)
+                                    user_cds['exception'] = {
+                                        'type': 'ribosomal_slippage',
+                                        'aa': 'X',
+                                        'start': -1,
+                                        'stop': -1
+                                    }      
+                                    log.debug(
+                                        'user-provided CDS: extract ribosomal slippage aa. seq=%s, start=%i, stop=%i, aa=[%s..%s]',
+                                        seq['id'], start, end, aa[:10], aa[-10:]
+                                    )
+                                elif('transl_except' in feature.qualifiers):  # import cases of translational exceptions
+                                    if('aa:sec' in feature.qualifiers['transl_except'][0].lower()):
+                                        aa = str(feature.qualifiers['translation'][0]).upper()
+                                        selenocysteine_pos = aa.find('U') + 1
+                                        if(user_cds['strand'] == bc.STRAND_FORWARD):
+                                            selenocysteine_codon_start = (user_cds['start'] - 1) + selenocysteine_pos * 3 - 2
+                                            selenocysteine_codon_stop = selenocysteine_codon_start + 2
+                                        else:
+                                            selenocysteine_codon_stop = user_cds['stop'] - (selenocysteine_pos * 3 - 3)
+                                            selenocysteine_codon_start = selenocysteine_codon_stop - 2
+                                        user_cds['exception'] = {
+                                            'type': 'selenocysteine',
+                                            'aa': 'Sec',
+                                            'start': selenocysteine_codon_start,
+                                            'stop': selenocysteine_codon_stop,
+                                            'codon_position': selenocysteine_pos
+                                        }
+                                else:
+                                    try:
+                                        aa = str(Seq(nt).translate(table=cfg.translation_table, cds=True))
+                                    except:  # skip uncommon translations
+                                        log.warning('user-provided CDS: CDS could not be translated into a valid amino acid sequence! seq=%s, start=%i, stop=%i, strand=%s, edge=%s, cds=%s', user_cds['sequence'], user_cds['start'], user_cds['stop'], user_cds['strand'], user_cds.get('edge', False), nt)
+                                        no_skipped_features += 1
+                                        continue
                                 user_cds['aa'] = aa
                                 user_cds['aa_digest'], user_cds['aa_hexdigest'] = bu.calc_aa_hash(aa)
                             except:
-                                log.error('user-provided CDS: CDS could not be translated into a valid amino acid sequence! contig=%s, start=%i, stop=%i, cds=%s', user_cds['contig'], user_cds['start'], user_cds['stop'], nt)
-                                raise ValueError(f"User-provided CDS could not be translated into a valid amino acid sequence! contig={user_cds['contig']}, start={user_cds['start']}, stop={user_cds['stop']}, cds={nt}")
-                            
+                                log.error('user-provided CDS: CDS could not be translated into a valid amino acid sequence! seq=%s, start=%i, stop=%i, strand=%s, edge=%s, cds=%s', user_cds['sequence'], user_cds['start'], user_cds['stop'], user_cds['strand'], user_cds.get('edge', False), nt)
+                                raise ValueError(f"User-provided CDS could not be translated into a valid amino acid sequence! sequence={user_cds['sequence']}, start={user_cds['start']}, stop={user_cds['stop']}, cds={nt}")
                             log.info(
-                                'user-provided CDS: contig=%s, start=%i, stop=%i, strand=%s, nt=[%s..%s], aa=[%s..%s]',
-                                user_cds['contig'], user_cds['start'], user_cds['stop'], user_cds['strand'], nt[:10], nt[-10:], aa[:10], aa[-10:]
+                                'user-provided CDS: seq=%s, start=%i, stop=%i, strand=%s, nt=[%s..%s], aa=[%s..%s]',
+                                user_cds['sequence'], user_cds['start'], user_cds['stop'], user_cds['strand'], nt[:10], nt[-10:], aa[:10], aa[-10:]
                             )
                             user_cdss.append(user_cds)
         except Exception as e:
             log.error('user-provided CDS: regions/features file GenBank format not valid!', exc_info=True)
             sys.exit(f'ERROR: User-provided regions/features file GenBank format not valid!')
     else:
-        log.warn('user-provided regions/features file suffix not detected! suffix=%s, path=%s', file_suffix, str(import_path))
+        log.warning('user-provided regions/features file suffix not detected! suffix=%s, path=%s', str(file_suffices), str(import_path))
     
-    return user_cdss
+    return user_cdss, no_skipped_features
 
 
 def predict_pfam(cdss: Sequence[dict]) -> Sequence[dict]:
@@ -288,19 +404,19 @@ def predict_pfam(cdss: Sequence[dict]) -> Sequence[dict]:
     pfam_hits = []
     cds_with_pfams_hits = {}
     orf_by_aa_digest = orf.get_orf_dictionary(cdss)
-    alphabet: pyhmmer.easel.Alphabet = pyhmmer.easel.Alphabet.amino()
-    proteins: list[pyhmmer.easel.DigitalSequence] = [ pyhmmer.easel.TextSequence(sequence=cds['aa'], name=bytes(orf.get_orf_key(cds), 'UTF-8')).digitize(alphabet) for cds in cdss ]
-    with pyhmmer.plan7.HMMFile(cfg.db_path.joinpath('pfam')) as hmm:
-        for top_hits in pyhmmer.hmmsearch(hmm, proteins, bit_cutoffs='gathering', cpus=cfg.threads):
+    alphabet: "AA" = pyhmmer.easel.Alphabet.amino()
+    proteins: "DigitalSequenceBlock[AA]" = TextSequenceBlock(TextSequence(sequence=cds['aa'], name=orf.get_orf_key(cds)) for cds in cdss).digitize(alphabet)
+    with pyhmmer.plan7.HMMFile(cfg.db_path.joinpath('pfam'), alphabet=alphabet) as hmm_fh:
+        for top_hits in pyhmmer.hmmsearch(hmm_fh, proteins, bit_cutoffs='gathering', cpus=cfg.threads):
             for hit in top_hits:
-                aa_identifier = hit.name.decode()
+                aa_identifier = hit.name
                 cds = orf_by_aa_digest[aa_identifier]
                 domain_cov = (hit.best_domain.alignment.hmm_to - hit.best_domain.alignment.hmm_from + 1) / len(hit.best_domain.alignment.hmm_sequence)
                 aa_cov = (hit.best_domain.alignment.target_to - hit.best_domain.alignment.target_from + 1) / len(cds['aa'])
 
                 pfam = OrderedDict()
-                pfam['id'] = hit.best_domain.alignment.hmm_accession.decode()
-                pfam['name'] = hit.best_domain.alignment.hmm_name.decode()
+                pfam['id'] = hit.best_domain.alignment.hmm_accession
+                pfam['name'] = hit.best_domain.alignment.hmm_name
                 pfam['length'] = len(hit.best_domain.alignment.hmm_sequence)
                 pfam['aa_cov'] = aa_cov
                 pfam['hmm_cov'] = domain_cov
@@ -316,8 +432,8 @@ def predict_pfam(cdss: Sequence[dict]) -> Sequence[dict]:
                 pfam_hits.append(cds)
                 cds_with_pfams_hits[aa_identifier] = cds
                 log.info(
-                    'pfam detected: contig=%s, start=%i, stop=%i, strand=%s, pfam-id=%s, length=%i, aa-start=%i, aa-stop=%i, aa-cov=%1.1f, hmm-cov=%1.1f, evalue=%1.1e, bitscore=%1.1f, name=%s',
-                    cds['contig'], cds['start'], cds['stop'], cds['strand'], pfam['id'], pfam['length'], pfam['start'],
+                    'pfam detected: seq=%s, start=%i, stop=%i, strand=%s, pfam-id=%s, length=%i, aa-start=%i, aa-stop=%i, aa-cov=%1.1f, hmm-cov=%1.1f, evalue=%1.1e, bitscore=%1.1f, name=%s',
+                    cds['sequence'], cds['start'], cds['stop'], cds['strand'], pfam['id'], pfam['length'], pfam['start'],
                     pfam['stop'], pfam['aa_cov'], pfam['hmm_cov'], pfam['evalue'], pfam['score'], pfam['name']
                 )
     log.info('predicted-pfams=%i, CDS-w/-pfams=%i', len(pfam_hits), len(cds_with_pfams_hits))
@@ -332,42 +448,42 @@ def analyze_proteins(cdss: Sequence[dict]):
             seq_stats['molecular_weight'] = seq.molecular_weight()
         except:
             log.warning(
-                'could not calc molecular weight! contig=%s, start=%i, stop=%i, strand=%s, frame=%s',
-                cds['contig'], cds['start'], cds['stop'], cds['strand'], cds['frame']
+                'could not calc molecular weight! seq=%s, start=%i, stop=%i, strand=%s, frame=%s',
+                cds['sequence'], cds['start'], cds['stop'], cds['strand'], cds['frame']
             )
             seq_stats['molecular_weight'] = None
         try:
             seq_stats['isoelectric_point'] = seq.isoelectric_point()
         except:
             log.warning(
-                'could not calc isoelectric point! contig=%s, start=%i, stop=%i, strand=%s, frame=%s',
-                cds['contig'], cds['start'], cds['stop'], cds['strand'], cds['frame']
+                'could not calc isoelectric point! seq=%s, start=%i, stop=%i, strand=%s, frame=%s',
+                cds['sequence'], cds['start'], cds['stop'], cds['strand'], cds['frame']
             )
             seq_stats['isoelectric_point'] = None
         cds['seq_stats'] = seq_stats
 
 
-def revise_translational_exceptions(genome: dict, cdss: Sequence[dict]):
+def revise_translational_exceptions(data: dict, cdss: Sequence[dict]):
     """
     Revise translational exceptions as for istance selenocystein proteins.
     """
     no_revised = 0
-    if(bc.FEATURE_NC_RNA_REGION not in genome['features']):  # check if ncRNA regions have been detected, otherwise skip analysis and return
+    if(len([feat for feat in data['features'] if feat['type'] == bc.FEATURE_NC_RNA_REGION]) == 0):  # check if ncRNA regions have been detected, otherwise skip analysis and return
         return no_revised
 
-    contigs = {c['id']: c for c in genome['contigs']}
+    sequences = {seq['id']: seq for seq in data['sequences']}
     # detect splitted orphan ORFs of selenocystein proteins that are subject to stop codon recoding.
-    cdss_per_contigs = {k['id']: [] for k in genome['contigs']}  # get CDS per contig
+    cdss_per_sequences = {seq['id']: [] for seq in data['sequences']}  # get CDS per sequence
     for cds in cdss:
-        cdss_per_contig = cdss_per_contigs[cds['contig']]
+        cdss_per_sequence = cdss_per_sequences[cds['sequence']]
         if('truncated' not in cds):  # exclude truncated CDS for now
-            cdss_per_contig.append(cds)
-    cds_pairs_per_contig = {k['id']: [] for k in genome['contigs']}  # extract inframe primate CDS neighbouring pairs
-    for id, cdss_per_contig in cdss_per_contigs.items():
-        cdss_per_contig = sorted(cdss_per_contig, key=lambda k: k['start'])
-        for i in range(1, len(cdss_per_contig)):
-            cds_a = cdss_per_contig[i-1]
-            cds_b = cdss_per_contig[i]
+            cdss_per_sequence.append(cds)
+    cds_pairs_per_sequence = {seq['id']: [] for seq in data['sequences']}  # extract inframe primate CDS neighbouring pairs
+    for id, cdss_per_sequence in cdss_per_sequences.items():
+        cdss_per_sequence = sorted(cdss_per_sequence, key=lambda k: k['start'])
+        for i in range(1, len(cdss_per_sequence)):
+            cds_a = cdss_per_sequence[i-1]
+            cds_b = cdss_per_sequence[i]
             strand = cds_a['strand']
             upstream_stop_codon = cds_a['nt'][-3:] if strand == bc.STRAND_FORWARD else cds_b['nt'][-3:]
             if(
@@ -375,27 +491,27 @@ def revise_translational_exceptions(genome: dict, cdss: Sequence[dict]):
                 cds_a['frame'] == cds_b['frame'] and  # up- and downstream ORFs on the same frame
                 upstream_stop_codon == 'TGA' and  # tRNAScan-SE 2.0 only predicts tRNA-Sec with UCA anticodons, therefore we can only detect TGA stop codons
                 (cds_b['start'] - cds_a['stop']) < 100):  # up- and downstream ORFs in close proximity
-                cds_pairs = cds_pairs_per_contig[cds_a['contig']]
+                cds_pairs = cds_pairs_per_sequence[cds_a['sequence']]
                 cds_pairs.append((cds_a, cds_b))
 
-    recoding_regions = [ncrna_region for ncrna_region in genome['features'][bc.FEATURE_NC_RNA_REGION] if ncrna_region['class'] == so.SO_CIS_REG_RECODING_STIMULATION_REGION]  #  Selenocysteine insertion sequences
+    recoding_regions = [ncrna_region for ncrna_region in data['features'] if ncrna_region['type'] == bc.FEATURE_NC_RNA_REGION  and  ncrna_region['class'] == so.SO_CIS_REG_RECODING_STIMULATION_REGION]  #  Selenocysteine insertion sequences
     for recoding_region in recoding_regions:
         if('selenocysteine' in recoding_region.get('product', '').lower()):
-            cds_pairs = cds_pairs_per_contig[recoding_region['contig']]
+            cds_pairs = cds_pairs_per_sequence[recoding_region['sequence']]
             for cds_a, cds_b in cds_pairs:  # find CDS pair around recoding region
                 strand = cds_a['strand']
                 if(
                     strand == recoding_region['strand'] and  # everything is on the same strand
                     cds_a['start'] < recoding_region['start'] and recoding_region['stop'] < cds_b['stop']):  # recoding region lies between up- and downstream ORFs
                     log.debug(
-                        'selenocysteine recoding ncRNA/CDS pair detected: contig=%s, strand=%s, CDS-A=[%i...%i] (%s..%s), recoding-ie=[%i..%i], CDS-B=[%i...%i] (%s..%s)',
-                        recoding_region['contig'], recoding_region['strand'], cds_a['start'], cds_a['stop'], cds_a['nt'][:10], cds_a['nt'][-10:], recoding_region['start'], recoding_region['stop'], cds_b['start'], cds_b['stop'], cds_b['nt'][:10], cds_b['nt'][-10:]
+                        'selenocysteine recoding ncRNA/CDS pair detected: seq=%s, strand=%s, CDS-A=[%i...%i] (%s..%s), recoding-ie=[%i..%i], CDS-B=[%i...%i] (%s..%s)',
+                        recoding_region['sequence'], recoding_region['strand'], cds_a['start'], cds_a['stop'], cds_a['nt'][:10], cds_a['nt'][-10:], recoding_region['start'], recoding_region['stop'], cds_b['start'], cds_b['stop'], cds_b['nt'][:10], cds_b['nt'][-10:]
                     )
                     seleno_cds = copy.deepcopy(cds_a)
                     seleno_cds['stop'] = cds_b['stop']
                     seleno_cds['rbs_motif'] = cds_a['rbs_motif'] if strand == bc.STRAND_FORWARD else cds_b['rbs_motif']
-                    contig = contigs[seleno_cds['contig']]
-                    nt = bu.extract_feature_sequence(seleno_cds, contig)
+                    seq = sequences[seleno_cds['sequence']]
+                    nt = bu.extract_feature_sequence(seleno_cds, seq)
                     seleno_cds['nt'] = nt
                     aa = str(Seq(nt).translate(table=cfg.translation_table, stop_symbol='*', to_stop=False, cds=False))
                     if(
@@ -413,11 +529,11 @@ def revise_translational_exceptions(genome: dict, cdss: Sequence[dict]):
                             'start': cds_a['stop'] - 2 if strand == bc.STRAND_FORWARD else cds_b['start'],
                             'stop': cds_a['stop'] if strand == bc.STRAND_FORWARD else cds_b['start'] + 2,
                             'codon_position': aa.find('U') + 1
-                        }                    
+                        }
                         cdss.append(seleno_cds)
                         log.info(
-                            'selenocysteine CDS detected: contig=%s, start=%i, stop=%i, strand=%s, frame=%i, exception=[%i..%i], nt=[%s..%s], aa=[%s..%s], aa-hexdigest=%s',
-                            seleno_cds['contig'], seleno_cds['start'], seleno_cds['stop'], seleno_cds['strand'], seleno_cds['frame'], seleno_cds['exception']['start'], seleno_cds['exception']['stop'], nt[:10], nt[-10:], aa[:10], aa[-10:], seleno_cds['aa_hexdigest']
+                            'selenocysteine CDS detected: seq=%s, start=%i, stop=%i, strand=%s, frame=%i, exception=[%i..%i], nt=[%s..%s], aa=[%s..%s], aa-hexdigest=%s',
+                            seleno_cds['sequence'], seleno_cds['start'], seleno_cds['stop'], seleno_cds['strand'], seleno_cds['frame'], seleno_cds['exception']['start'], seleno_cds['exception']['stop'], nt[:10], nt[-10:], aa[:10], aa[-10:], seleno_cds['aa_hexdigest']
                         )
                         discard = {  # mark CDS a/b as discarded
                             'type': bc.DISCARD_TYPE_RECODING,
@@ -428,60 +544,40 @@ def revise_translational_exceptions(genome: dict, cdss: Sequence[dict]):
                         no_revised += 1
                     else:
                         log.warning(
-                            'spurious selenocysteine CDS detected: contig=%s, start=%i, stop=%i, strand=%s, frame=%i, nt=[%s], aa=[%s]',
-                            seleno_cds['contig'], seleno_cds['start'], seleno_cds['stop'], seleno_cds['strand'], seleno_cds['frame'], nt, aa
+                            'spurious selenocysteine CDS detected: seq=%s, start=%i, stop=%i, strand=%s, frame=%i, nt=[%s], aa=[%s]',
+                            seleno_cds['sequence'], seleno_cds['start'], seleno_cds['stop'], seleno_cds['strand'], seleno_cds['frame'], nt, aa
                         )
     return no_revised
 
 
-def revise_special_cases_annotated(genome: dict, cdss: Sequence[dict]):
+def revise_special_cases_annotated(data: dict, cdss: Sequence[dict]):
     """
-    Revise rare but known special cases as for istance supposedly truncated dnaA genes on rotated chromosome starts
-    which often appear on re-annotated genomes.
+    Revise rare but known special cases as for istance supposedly truncated dnaA/repABC genes on rotated chromosome/plasmid starts
+    which often appear on re-orientated sequences.
     """
-    
-    contigs = {c['id']: c for c in genome['contigs']}
-    # look for supposedly truncated dnaA genes on rotated chromosome starts: start=1, strand=+
-    dnaA = None
-    for cds in cdss:
-        contig = contigs[cds['contig']]
-        if(
-            contig['complete'] and
-            cds['start'] == 1 and 
-            cds['strand'] == bc.STRAND_FORWARD and 
-            cds['start_type'] == 'Edge' and 
-            cds['rbs_motif'] is None and
-            ('dnaa' in cds['product'].lower().split() or cds['gene'] == 'dnaA')):
-            dnaA = cds
-            break
-    if(dnaA is not None and 'truncated' in dnaA):
-        dnaA.pop('truncated')
-        gene = dnaA.get('gene', '-')
-        log.info(
-            'revise supposedly truncated dnaA gene on rotated chromosome start: contig=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, nt=[%s..%s], aa=[%s..%s]',
-            dnaA['contig'], dnaA['start'], dnaA['stop'], dnaA['strand'], gene, dnaA['product'], dnaA['nt'][:10], dnaA['nt'][-10:], dnaA['aa'][:10], dnaA['aa'][-10:]
-        )
-    
-    # look for supposedly truncated repA genes on rotated plasmid starts: start=1, strand=+
-    repAs = []
-    for cds in cdss:
-        contig = contigs[cds['contig']]
-        if(
-            contig['complete'] and
-            cds['start'] == 1 and 
-            cds['strand'] == bc.STRAND_FORWARD and 
-            cds['start_type'] == 'Edge' and 
-            cds['rbs_motif'] is None and
-            ('repa' in cds['product'].lower().split() or cds['gene'] == 'repA')):
-            repAs.append(cds)
-    for repA in repAs:
-        if('truncated' in repA):
-            repA.pop('truncated')
-            gene = repA.get('gene', '-')
-            log.info(
-                'revise supposedly truncated repA gene on rotated plasmid start: contig=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, nt=[%s..%s], aa=[%s..%s]',
-                repA['contig'], repA['start'], repA['stop'], repA['strand'], gene, repA['product'], repA['nt'][:10], repA['nt'][-10:], repA['aa'][:10], repA['aa'][-10:]
-            )
+    for seq_id in [seq['id'] for seq in data['sequences'] if seq['complete']]:
+        seq_cdss = [cds for cds in cdss if cds['sequence'] == seq_id]
+        for cds in seq_cdss:
+            # look for supposedly truncated genes on rotated sequences
+            if cds['start'] == 1  and  cds['strand'] == bc.STRAND_FORWARD  and  'truncated' in cds  and  cds['start_type'] == 'Edge'  and  cds['rbs_motif'] is None:
+                cds_gene_symbol = cds.get('gene', '-')  or  '-'
+                cds_product = cds.get('product', '-')  or  '-'
+                if RE_CHROM_ROTATION_GENE.fullmatch(cds_gene_symbol) or any(map(lambda x: x is not None, [RE_CHROM_ROTATION_GENE.fullmatch(term) for term in cds_product.split()])):
+                    # look for dnaA genes on rotated chromosome starts
+                    cds.pop('truncated')
+                    log.info(
+                        'revise supposedly truncated dnaA gene on rotated chromosome start: seq=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, nt=[%s..%s], aa=[%s..%s]',
+                        cds['sequence'], cds['start'], cds['stop'], cds['strand'], cds_gene_symbol, cds_product, cds['nt'][:10], cds['nt'][-10:], cds['aa'][:10], cds['aa'][-10:]
+                    )
+                    break
+                elif RE_PLASMID_ROTATION_GENE.fullmatch(cds_gene_symbol) or any(map(lambda x: x is not None, [RE_PLASMID_ROTATION_GENE.fullmatch(term) for term in cds_product.split()])):
+                    # look for repABC|parAB genes on rotated plasmid starts
+                    cds.pop('truncated')
+                    log.info(
+                        'revise supposedly truncated repABC/parAB gene on rotated plasmid start: seq=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, nt=[%s..%s], aa=[%s..%s]',
+                        cds['sequence'], cds['start'], cds['stop'], cds['strand'], cds_gene_symbol, cds_product, cds['nt'][:10], cds['nt'][-10:], cds['aa'][:10], cds['aa'][-10:]
+                    )
+                    break
 
 
 def predict_pseudo_candidates(hypotheticals: Sequence[dict]) -> Sequence[dict]:
@@ -503,8 +599,9 @@ def predict_pseudo_candidates(hypotheticals: Sequence[dict]) -> Sequence[dict]:
         '--query-cover', str(int(bc.MIN_PSEUDOGENE_QUERY_COVERAGE * 100)),      # '80'
         '--subject-cover', str(int(bc.MIN_PSEUDOGENE_SUBJECT_COVERAGE * 100)),  # '40'
         '--max-target-seqs', '1',  # single best output
-        '--outfmt', '6', 'qseqid', 'sseqid', 'pident', 'length', 'qstart', 'qend', 'sstart', 'send', 'full_sseq',
+        '--outfmt', '6', 'qseqid', 'sseqid', 'qlen', 'slen', 'length', 'pident', 'evalue', 'bitscore', 'qstart', 'qend', 'sstart', 'send', 'full_sseq',
         '--threads', str(cfg.threads),
+        '--load-threads', str(min(cfg.threads, 8)),  # limit load threads to max 8
         '--tmpdir', str(cfg.tmp_path),
         '--block-size', '3',  # slightly increase block size for faster executions
         '--fast'
@@ -527,18 +624,21 @@ def predict_pseudo_candidates(hypotheticals: Sequence[dict]) -> Sequence[dict]:
     cds_by_hexdigest = orf.get_orf_dictionary(hypotheticals)
     with diamond_output_path.open() as fh:
         for line in fh:
-            (aa_identifier, cluster_id, identity, alignment_length, query_start, query_end, subject_start, subject_end, subject_sequence) = line.rstrip('\n').split('\t')
+            (aa_identifier, cluster_id, query_length, subject_length, alignment_length, identity, evalue, bitscore, query_start, query_end, subject_start, subject_end, subject_sequence) = line.rstrip('\n').split('\t')
             cds = cds_by_hexdigest[aa_identifier]
             query_cov = int(alignment_length) / len(cds['aa'])
-            subject_cov = int(alignment_length) / len(subject_sequence)
+            subject_cov = int(alignment_length) / int(subject_length)
             identity = float(identity) / 100
-            if query_cov >= bc.MIN_PSEUDOGENE_QUERY_COVERAGE and identity >= bc.MIN_PSEUDOGENE_IDENTITY \
-                    and bc.MIN_PSEUDOGENE_SUBJECT_COVERAGE <= subject_cov < bc.MIN_PSC_COVERAGE:
+            bitscore = float(bitscore)
+            evalue = float(evalue)
+            if(query_cov >= bc.MIN_PSEUDOGENE_QUERY_COVERAGE and bc.MIN_PSEUDOGENE_SUBJECT_COVERAGE <= subject_cov < bc.MIN_PSC_COVERAGE and identity >= bc.MIN_PSEUDOGENE_IDENTITY):
                 cds['pseudo-inference'] = {
                     DB_PSC_COL_UNIREF90: cluster_id,
-                    'query-cov': query_cov,
-                    'subject-cov': subject_cov,
+                    'query_cov': query_cov,
+                    'subject_cov': subject_cov,
                     'identity': identity,
+                    'score': bitscore,
+                    'evalue': evalue,
                     'gene_start': int(query_start),
                     'gene_end': int(query_end),
                     'reference_start': int(subject_start),
@@ -547,14 +647,14 @@ def predict_pseudo_candidates(hypotheticals: Sequence[dict]) -> Sequence[dict]:
                 }
                 pseudo_candidates.append(cds)
                 log.debug(
-                    'pseudogene-candidate: contig=%s, start=%i, stop=%i, strand=%s, aa-length=%i, query-cov=%0.3f, subject-cov=%0.3f, identity=%0.3f, UniRef90=%s',
-                    cds['contig'], cds['start'], cds['stop'], cds['strand'], len(cds['aa']), query_cov, subject_cov, identity, cluster_id
+                    'pseudogene-candidate: seq=%s, start=%i, stop=%i, strand=%s, aa-length=%i, query-cov=%0.3f, subject-cov=%0.3f, identity=%0.3f, score=%0.1f, evalue=%1.1e, UniRef90=%s',
+                    cds['sequence'], cds['start'], cds['stop'], cds['strand'], len(cds['aa']), query_cov, subject_cov, identity, bitscore, evalue, cluster_id
                 )
     log.info('found: pseudogene-candidates=%i', len(pseudo_candidates))
     return pseudo_candidates
 
 
-def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], genome: dict) -> Sequence[dict]:
+def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], data: dict) -> Sequence[dict]:
     """
     Conduct a BLASTX search of 5'/3'-extended sequences of pseudogene candidates against matching PSCs.
     Search for and determine possible pseudogenization causes in the resulting alignments.
@@ -570,13 +670,13 @@ def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], genome:
             fh.write(f">{cluster_id}\n{faa_seq}\n")
 
     # Get extended cds sequences
-    contigs = {c['id']: c for c in genome['contigs']}
+    sequences = {seq['id']: seq for seq in data['sequences']}
     candidates_extended_positions = {}
     with candidates_elongated_sequences_path.open(mode='w') as fh:
         for cds in candidates:
-            contig = contigs[cds['contig']]
-            cds_elongated = get_elongated_cds(cds, contig)
-            seq = bu.extract_feature_sequence(cds_elongated, contig)
+            seq = sequences[cds['sequence']]
+            cds_elongated = get_elongated_cds(cds, seq)
+            seq = bu.extract_feature_sequence(cds_elongated, seq)
             orf_key = orf.get_orf_key(cds)
             fh.write(f">{orf_key}\n{seq}\n")
             candidates_extended_positions[orf_key] = cds_elongated
@@ -637,11 +737,14 @@ def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], genome:
                     query_alignment_start = int(hit.find('Hit_hsps/Hsp/Hsp_query-from').text)
                     query_alignment_stop = int(hit.find('Hit_hsps/Hsp/Hsp_query-to').text)
                     alignment_length = int(hit.find('Hit_hsps/Hsp/Hsp_align-len').text)
+                    identity = float(hit.find('Hit_hsps/Hsp/Hsp_identity').text) / alignment_length
+                    bitscore = float(hit.find('Hit_hsps/Hsp/Hsp_bit-score').text)
+                    evalue = float(hit.find('Hit_hsps/Hsp/Hsp_evalue').text)
 
                     if alignment_length == len(cds['aa']):  # skip non-extended genes (full match)
                         log.debug(
-                            'no pseudogene (full match): contig=%s, start=%i, stop=%i, strand=%s',
-                            cds['contig'], cds['start'], cds['stop'], cds['strand']
+                            'no pseudogene (full match): seq=%s, start=%i, stop=%i, strand=%s',
+                            cds['sequence'], cds['start'], cds['stop'], cds['strand']
                         )
                         continue
 
@@ -661,7 +764,10 @@ def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], genome:
                             'stop': positions['stop'],
                             'observations': clean_observations(observations),
                             'inference': cds['pseudo-inference'],
-                            'paralog': is_paralog(uniref90_by_hexdigest, aa_identifier, cluster_id)
+                            'paralog': is_paralog(uniref90_by_hexdigest, aa_identifier, cluster_id),
+                            'identity': identity,
+                            'score': bitscore,
+                            'evalue': evalue
                         }
 
                         effects = []
@@ -691,20 +797,17 @@ def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], genome:
                         pseudogene['description'] = f"{effects}. {causes}" if effects != '' else causes
 
                         if bc.FEATURE_END_5_PRIME in directions and bc.FEATURE_END_3_PRIME in directions:
-                            truncation = bc.FEATURE_END_BOTH
+                            cds['truncated'] = bc.FEATURE_END_BOTH
                         elif bc.FEATURE_END_5_PRIME in directions:
-                            truncation = bc.FEATURE_END_5_PRIME if cds['strand'] == bc.STRAND_FORWARD else bc.FEATURE_END_3_PRIME
+                            cds['truncated'] = bc.FEATURE_END_5_PRIME if cds['strand'] == bc.STRAND_FORWARD else bc.FEATURE_END_3_PRIME
                         elif bc.FEATURE_END_3_PRIME in directions:
-                            truncation = bc.FEATURE_END_3_PRIME if cds['strand'] == bc.STRAND_FORWARD else bc.FEATURE_END_5_PRIME
-                        cds['truncated'] = truncation
-
-                        cds['pseudo'] = True
+                            cds['truncated'] = bc.FEATURE_END_3_PRIME if cds['strand'] == bc.STRAND_FORWARD else bc.FEATURE_END_5_PRIME
                         cds[bc.PSEUDOGENE] = pseudogene
                         cds.pop('hypothetical')
                         pseudogenes.append(cds)
                         log.info(
-                            'pseudogene: contig=%s, start=%i, stop=%i, strand=%s, insertions=%s, deletions=%s, mutations=%s, effect=%s',
-                            cds['contig'], cds['start'], cds['stop'], cds['strand'], observations.get(bc.PSEUDOGENE_CAUSE_INSERTION, []), observations.get(bc.PSEUDOGENE_CAUSE_DELETION, []), observations.get(bc.PSEUDOGENE_CAUSE_MUTATION, []), effects
+                            'pseudogene: seq=%s, start=%i, stop=%i, strand=%s, insertions=%s, deletions=%s, mutations=%s, effect=%s',
+                            cds['sequence'], cds['start'], cds['stop'], cds['strand'], observations.get(bc.PSEUDOGENE_CAUSE_INSERTION, []), observations.get(bc.PSEUDOGENE_CAUSE_DELETION, []), observations.get(bc.PSEUDOGENE_CAUSE_MUTATION, []), effects
                         )
 
                     elif observations[bc.PSEUDOGENE_EXCEPTION_SELENOCYSTEINE] or observations[bc.PSEUDOGENE_EXCEPTION_PYROLYSINE]:
@@ -717,7 +820,7 @@ def detect_pseudogenes(candidates: Sequence[dict], cdss: Sequence[dict], genome:
     return pseudogenes
 
 
-def get_elongated_cds(cds: dict, contig: dict, offset: int = bc.PSEUDOGENE_OFFSET) -> Dict[str, Union[int, str, bool]]:
+def get_elongated_cds(cds: dict, sequence: dict, offset: int = bc.PSEUDOGENE_OFFSET) -> Dict[str, Union[int, str, bool]]:
     """
     Elongate the given CDS sequence with the offset in upstream and downstream direction, if possible.
     """
@@ -730,22 +833,26 @@ def get_elongated_cds(cds: dict, contig: dict, offset: int = bc.PSEUDOGENE_OFFSE
         'elongation_downstream': offset
     }
 
-    contig_length = len(contig['sequence'])
-    if contig['topology'] == 'circular' and elongated_cds['start'] - offset < 0:
-        elongated_cds['start'] = contig_length + elongated_cds['start'] - offset
-        elongated_cds['edge'] = True
-    elif elongated_cds['start'] - offset < 0:
+    sequence_length = len(sequence['nt'])
+    if elongated_cds['start'] - offset < 0:
+        if sequence['topology'] == 'circular':
+            elongated_cds['start'] = sequence_length + elongated_cds['start'] - offset
+            elongated_cds['edge'] = True
+        else:
+            elongated_cds['start'] = 1
+            elongated_cds['elongation_upstream'] = cds['start']
+    elif elongated_cds['start'] - offset == 0:
         elongated_cds['start'] = 1
-        elongated_cds['elongation_upstream'] = cds['start']
     else:
         elongated_cds['start'] = elongated_cds['start'] - offset
 
-    if contig['topology'] == 'circular' and elongated_cds['stop'] + offset > contig_length:
-        elongated_cds['stop'] = elongated_cds['stop'] + offset - contig_length
-        elongated_cds['edge'] = True
-    elif elongated_cds['stop'] + offset > contig_length:
-        elongated_cds['stop'] = contig_length
-        elongated_cds['elongation_downstream'] = contig_length - cds['stop']
+    if elongated_cds['stop'] + offset > sequence_length:
+        if sequence['topology'] == 'circular':
+            elongated_cds['stop'] = elongated_cds['stop'] + offset - sequence_length
+            elongated_cds['edge'] = True
+        else:
+            elongated_cds['stop'] = sequence_length
+            elongated_cds['elongation_downstream'] = sequence_length - cds['stop']
     else:
         elongated_cds['stop'] = elongated_cds['stop'] + offset
 
@@ -829,8 +936,8 @@ def compare_alignments(observations: dict, alignment: str, ref_alignment: str, c
                 observations[bc.PSEUDOGENE_EFFECT_START].add(genome_position)
                 observations['directions'].add(bc.FEATURE_END_3_PRIME)
                 log.info(
-                    'pseudogene observation: contig=%s, start=%i, stop=%i, strand=%s, original start=%i',
-                    cds['contig'], cds['start'], cds['stop'], cds['strand'], cds['start'] + genome_position
+                    'pseudogene observation: seq=%s, start=%i, stop=%i, strand=%s, original start=%i',
+                    cds['sequence'], cds['start'], cds['stop'], cds['strand'], cds['start'] + genome_position
                 )
             else:  # RBS was predicted (protein iso-form) -> skip
                 pass
@@ -851,8 +958,8 @@ def compare_alignments(observations: dict, alignment: str, ref_alignment: str, c
             observations[bc.PSEUDOGENE_CAUSE_INSERTION].add(genome_position)
             observations['directions'].add(get_direction(alignment_position, edge))
             log.info(
-                'pseudogene observation: contig=%s, start=%i, stop=%i, strand=%s, cause=insertion, position=%i',
-                cds['contig'], cds['start'], cds['stop'], cds['strand'], genome_position
+                'pseudogene observation: seq=%s, start=%i, stop=%i, strand=%s, cause=insertion, position=%i',
+                cds['sequence'], cds['start'], cds['stop'], cds['strand'], genome_position
             )
             alignment_position += 1
         elif char == '/':  # deletion
@@ -861,23 +968,23 @@ def compare_alignments(observations: dict, alignment: str, ref_alignment: str, c
             observations[bc.PSEUDOGENE_CAUSE_DELETION].add(genome_position)
             observations['directions'].add(get_direction(alignment_position, edge))
             log.info(
-                'pseudogene observation: contig=%s, start=%i, stop=%i, strand=%s, cause=deletion, position=%i',
-                cds['contig'], cds['start'], cds['stop'], cds['strand'], genome_position
+                'pseudogene observation: seq=%s, start=%i, stop=%i, strand=%s, cause=deletion, position=%i',
+                cds['sequence'], cds['start'], cds['stop'], cds['strand'], genome_position
             )
         elif char == '*':  # stop codon, selenocysteine, pyrolysine
             if ref_char == 'U':  # selenocysteine
                 genome_position = get_abs_position(cds, start, alignment_position, edge)
                 observations[bc.PSEUDOGENE_EXCEPTION_SELENOCYSTEINE].add(genome_position)
                 log.info(
-                    'pseudogene observation: contig=%s, start=%i, stop=%i, strand=%s, exception=selenocysteine, position=%i',
-                    cds['contig'], cds['start'], cds['stop'], cds['strand'], genome_position
+                    'pseudogene observation: seq=%s, start=%i, stop=%i, strand=%s, exception=selenocysteine, position=%i',
+                    cds['sequence'], cds['start'], cds['stop'], cds['strand'], genome_position
                 )
             elif ref_char == 'O':  # pyrolysine
                 genome_position = get_abs_position(cds, start, alignment_position, edge)
                 observations[bc.PSEUDOGENE_EXCEPTION_PYROLYSINE].add(genome_position)
                 log.info(
-                    'pseudogene observation: contig=%s, start=%i, stop=%i, strand=%s, exception=pyrolysin, position=%i',
-                    cds['contig'], cds['start'], cds['stop'], cds['strand'], genome_position
+                    'pseudogene observation: seq=%s, start=%i, stop=%i, strand=%s, exception=pyrolysin, position=%i',
+                    cds['sequence'], cds['start'], cds['stop'], cds['strand'], genome_position
                 )
             else:  # stop codon
                 mutation = ''
@@ -888,8 +995,8 @@ def compare_alignments(observations: dict, alignment: str, ref_alignment: str, c
                 observations[bc.PSEUDOGENE_EFFECT_STOP].add(genome_position)
                 observations['directions'].add(get_direction(alignment_position, edge))
                 log.info(
-                    'pseudogene observation: contig=%s, start=%i, stop=%i, strand=%s, effect=stop%s, position=%i',
-                    cds['contig'], cds['start'], cds['stop'], cds['strand'], mutation, genome_position
+                    'pseudogene observation: seq=%s, start=%i, stop=%i, strand=%s, effect=stop%s, position=%i',
+                    cds['sequence'], cds['start'], cds['stop'], cds['strand'], mutation, genome_position
                 )
             alignment_position += 3
         else:

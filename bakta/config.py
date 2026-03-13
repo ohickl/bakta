@@ -2,7 +2,6 @@ import logging
 import multiprocessing as mp
 import os
 import re
-import shutil
 import sys
 import tempfile
 
@@ -10,6 +9,7 @@ from argparse import Namespace
 from datetime import datetime
 from pathlib import Path
 
+import bakta
 import bakta.constants as bc
 
 
@@ -27,11 +27,12 @@ verbose = None
 debug = None
 
 # input / output configuration
+version = bakta.__version__
 db_path = None
 db_info = None
 tmp_path = None
 genome_path = None
-min_contig_length = None
+min_sequence_length = None
 prefix = None
 output_path = None
 force = None
@@ -47,14 +48,17 @@ taxon = None
 complete = None
 prodigal_tf = None
 translation_table = None
-keep_contig_headers = None
+keep_sequence_headers = None
 locus = None
 locus_tag = None
+locus_tag_increment = None
 gram = None
 replicons = None
 compliant = None
 user_proteins = None
+user_hmms = None
 meta = None
+partial = None
 regions = None
 
 # workflow configuration
@@ -69,6 +73,7 @@ skip_pseudo = None
 skip_sorf = None
 skip_gap = None
 skip_ori = None
+skip_filter = None
 skip_plot = None
 
 run_start = datetime.now()
@@ -90,7 +95,7 @@ def setup(args):
         verbose = True
 
     # input / output path configurations
-    global db_path, db_info, tmp_path, genome_path, min_contig_length, prefix, output_path, force
+    global db_path, db_info, tmp_path, genome_path, min_sequence_length, prefix, output_path, force
     db_path = check_db_path(args)
     tmp_path = check_tmp_path(args)
 
@@ -106,11 +111,11 @@ def setup(args):
     log.info('genome-path=%s', genome_path)
 
     # input / output configurations
-    min_contig_length = args.min_contig_length
-    if(min_contig_length <= 0):
-        log.error("wrong argument for 'min-contig-length' parameter! min_contig_length=%s", min_contig_length)
-        sys.exit(f"ERROR: wrong argument ({min_contig_length}) for 'min- contig-length' parameter! Value must be larger than 0")
-    log.info('min_contig_length=%s', min_contig_length)
+    min_sequence_length = args.min_contig_length
+    if(min_sequence_length <= 0):
+        log.error("wrong argument for 'min-contig-length' parameter! min_contig_length=%s", min_sequence_length)
+        sys.exit(f"ERROR: wrong argument ({min_sequence_length}) for 'min- contig-length' parameter! Value must be larger than 0")
+    log.info('min_contig_length=%s', min_sequence_length)
     log.info('prefix=%s', prefix)  # set in main.py before global logger config
     log.info('output-path=%s', output_path)
     force = args.force
@@ -161,7 +166,7 @@ def setup(args):
         taxon = None
 
     # annotation configurations
-    global complete, prodigal_tf, translation_table, keep_contig_headers, locus, locus_tag, gram, replicons, compliant, user_proteins, meta, regions
+    global complete, prodigal_tf, translation_table, keep_sequence_headers, locus, locus_tag, locus_tag_increment, gram, replicons, compliant, user_proteins, user_hmms, meta, partial, regions
     complete = args.complete
     log.info('complete=%s', complete)
     prodigal_tf = args.prodigal_tf
@@ -184,10 +189,12 @@ def setup(args):
     compliant = args.compliant
     log.info('compliant=%s', compliant)
     if(compliant):
-        min_contig_length = 200
-        log.info('compliant mode! min_contig_length=%s', min_contig_length)
+        min_sequence_length = 200
+        log.info('compliant mode! min_contig_length=%s', min_sequence_length)
     meta = args.meta
     log.info('meta=%s', meta)
+    partial = args.partial
+    log.info('partial=%s', partial)
     locus = args.locus
     if(locus is not None):
         if(locus == ''):
@@ -217,8 +224,10 @@ def setup(args):
                 log.error("Invalid 'locus-tag' parameter! locus-tag=%s", locus_tag)
                 sys.exit(f"ERROR: invalid 'locus-tag' parameter ({locus_tag})!\nLocus tag prefixes must contain between 1 and 24 alphanumeric characters or '_.-' signs.")
     log.info('locus-tag=%s', locus_tag)
-    keep_contig_headers = args.keep_contig_headers
-    log.info('keep_contig_headers=%s', keep_contig_headers)
+    locus_tag_increment = args.locus_tag_increment
+    log.info('locus-tag-increment=%s', locus_tag_increment)
+    keep_sequence_headers = args.keep_contig_headers
+    log.info('keep_contig_headers=%s', keep_sequence_headers)
     replicons = args.replicons
     if(replicons is not None):
         try:
@@ -233,6 +242,19 @@ def setup(args):
             sys.exit(f'ERROR: replicon table file ({replicons}) not valid!')
     log.info('replicon-table=%s', replicons)
     user_proteins = check_user_proteins(args)
+    user_hmms = args.hmms
+    if(user_hmms is not None):
+        try:
+            if(user_hmms == ''):
+                raise ValueError('File path argument must be non-empty')
+            user_hmms_path = Path(user_hmms).resolve()
+            check_readability('HMM', user_hmms_path)
+            check_content_size('HMM', user_hmms_path)
+            user_hmms = user_hmms_path
+        except:
+            log.error('provided HMM file not valid! path=%s', user_hmms)
+            sys.exit(f'ERROR: HMM file ({user_hmms}) not valid!')
+
     regions = args.regions
     if(regions is not None):
         try:
@@ -249,7 +271,7 @@ def setup(args):
     
 
     # workflow configurations
-    global skip_trna, skip_tmrna, skip_rrna, skip_ncrna, skip_ncrna_region, skip_crispr, skip_cds, skip_pseudo, skip_sorf, skip_gap, skip_ori, skip_plot
+    global skip_trna, skip_tmrna, skip_rrna, skip_ncrna, skip_ncrna_region, skip_crispr, skip_cds, skip_pseudo, skip_sorf, skip_gap, skip_ori, skip_filter, skip_plot
     skip_trna = args.skip_trna
     log.info('skip-tRNA=%s', skip_trna)
     skip_tmrna = args.skip_tmrna
@@ -272,6 +294,8 @@ def setup(args):
     log.info('skip-gap=%s', skip_gap)
     skip_ori = args.skip_ori
     log.info('skip-ori=%s', skip_ori)
+    skip_filter = args.skip_filter
+    log.info('skip-filter=%s', skip_filter)
     skip_plot = args.skip_plot
     log.info('skip-plot=%s', skip_plot)
 

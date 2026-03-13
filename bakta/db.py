@@ -10,8 +10,9 @@ import tarfile
 
 from pathlib import Path
 
-from alive_progress import alive_bar
 import requests
+
+from alive_progress import alive_bar
 
 import bakta
 import bakta.config as cfg
@@ -85,10 +86,10 @@ def check(db_path: Path) -> dict:
     log.info('detected: major=%i, minor=%i, type=%s, date=%s', db_info['major'], db_info['minor'], db_info['type'], db_info['date'])
     if(db_info['major'] < bakta.__db_schema_version__):
         log.error('wrong database version detected! required=%i, detected=%i', bakta.__db_schema_version__, db_info['major'])
-        sys.exit(f"ERROR: wrong database version detected!\nBakta version {bakta.__version__} requires database version {bakta.__db_schema_version__}.x, but {db_info['major']}.{db_info['minor']} was detected. Please, update the database from https://doi.org/10.5281/zenodo.4247253")
+        sys.exit(f"ERROR: wrong database version detected!\nBakta version {cfg.version} requires database version {bakta.__db_schema_version__}.x, but {db_info['major']}.{db_info['minor']} was detected. Please, update the database from https://doi.org/10.5281/zenodo.4247253")
     elif(db_info['major'] > bakta.__db_schema_version__):
         log.error('wrong database version detected! required=%i, detected=%i', bakta.__db_schema_version__, db_info['major'])
-        sys.exit(f"ERROR: wrong database version detected!\nBakta version {bakta.__version__} requires database version {bakta.__db_schema_version__}.x, but {db_info['major']}.{db_info['minor']} was detected. Please, update Bakta or download a compatible database version from https://doi.org/10.5281/zenodo.4247253")
+        sys.exit(f"ERROR: wrong database version detected!\nBakta version {cfg.version} requires database version {bakta.__db_schema_version__}.x, but {db_info['major']}.{db_info['minor']} was detected. Please, update Bakta or download a compatible database version from https://doi.org/10.5281/zenodo.4247253")
 
     required_db_files = FILE_NAMES
     required_db_files.append('psc.dmnd' if db_info['type'] == 'full' else 'pscc.dmnd')
@@ -114,7 +115,10 @@ def fetch_db_versions():
 
 def download(db_url: str, tarball_path: Path):
     try:
-        with tarball_path.open('wb') as fh_out, requests.get(db_url, stream=True) as resp:
+        headers = {
+            'User-Agent': f'bakta/{cfg.version} (contact: github.com/oschwengers/bakta)'
+        }
+        with tarball_path.open('wb') as fh_out, requests.get(db_url, headers=headers, stream=True) as resp:
             total_length = resp.headers.get('content-length')
             if(total_length is not None):  # content length header is set
                 total_length = int(total_length)
@@ -138,7 +142,7 @@ def calc_md5_sum(tarball_path: Path, buffer_size: int=1024*1024) -> str:
 
 def untar(tarball_path: Path, output_path: Path):
     try:
-        with tarball_path.open('rb') as fh_in, tarfile.open(fileobj=fh_in, mode='r:gz') as tar_file:
+        with tarball_path.open('rb') as fh_in, tarfile.open(fileobj=fh_in, mode='r:*') as tar_file:
             tar_file.extractall(path=str(output_path))
     except OSError:
         sys.exit(f'ERROR: Could not extract {tarball_path} to {output_path}')
@@ -149,7 +153,7 @@ def main():
     parser = bu.init_parser(sub_command='_db')
     group_runtime = parser.add_argument_group('Runtime & auxiliary options')
     group_runtime.add_argument('--help', '-h', action='help', help='Show this help message and exit')
-    group_runtime.add_argument('--version', '-V', action='version', version=f'%(prog)s {bakta.__version__}')
+    group_runtime.add_argument('--version', '-V', action='version', version=f'%(prog)s {cfg.version}')
 
     subparsers = parser.add_subparsers(dest='subcommand', help='sub-command help')
     parser_list = subparsers.add_parser('list', help='List available database versions')  # add list sub-command options
@@ -160,12 +164,16 @@ def main():
     parser_download.add_argument('--minor', '-n', action='store', type=int, default=0, help='Database minor version (default = most recent db minor version)')
     parser_download.add_argument('--type', choices=['full', 'light'], default='full', help='Database type (defaut = full)')
 
+    parser_install = subparsers.add_parser('install', help='Install a database from a local tarball file')  # add download sub-command options
+    parser_install.add_argument('--db-file', '-i', action='store', dest='db_file', type=Path, help='Database tarball file')
+    parser_install.add_argument('--output', '-o', action='store', default=Path.cwd(), type=Path, help='output directory (default = current working directory)')
+
     parser_update = subparsers.add_parser('update', help='Update an existing database to the most recent compatible version')  # add download sub-command options
     parser_update.add_argument('--db', '-d', action='store', default=None, help='Current database path (default = <bakta_path>/db). Can also be provided as BAKTA_DB environment variable.')
     parser_update.add_argument('--tmp-dir', '-t', action='store', dest='tmp_dir', default=Path.cwd(), help='Temporary directory to download & extract (default = current working directory)')
 
     args = parser.parse_args()
-    print(f'Bakta software version: {bakta.__version__}')
+    print(f'Bakta software version: {cfg.version}')
     print(f'Required database schema version: {bakta.__db_schema_version__}\n')
     if(args.subcommand == 'list'):
         versions = fetch_db_versions()
@@ -204,8 +212,8 @@ def main():
             compatible_sorted = sorted(compatible_versions, key=lambda v: v['minor'], reverse=True)
             required_version = compatible_sorted[0]
 
-        tarball_path = output_path.joinpath(f"{'db-light' if args.type == 'light' else 'db'}.tar.gz")
-        db_url = f"https://zenodo.org/record/{required_version['record']}/files/{'db-light' if args.type == 'light' else 'db'}.tar.gz"
+        tarball_path = output_path.joinpath(f"{'db-light' if args.type == 'light' else 'db'}.tar.xz")
+        db_url = f"https://zenodo.org/record/{required_version['record']}/files/{'db-light' if args.type == 'light' else 'db'}.tar.xz"
         print(f"Download database: v{required_version['major']}.{required_version['minor']}, type={args.type}, {required_version['date']}, DOI: {required_version['doi']}, URL: {db_url}...")
         download(db_url, tarball_path)
         print('\t... done')
@@ -248,6 +256,52 @@ def main():
         print('\t... done')
 
         print(f"\nRun Bakta using '--db {db_path}' or set a BAKTA_DB environment variable: 'export BAKTA_DB={db_path}'")
+    elif(args.subcommand == 'install'):
+        bu.test_dependency(bu.DEPENDENCY_AMRFINDERPLUS)
+        output_path = cfg.check_output_path(args.output, True)
+
+        tarball_path = args.db_file
+        try:
+            if(tarball_path is None):
+                raise ValueError('File path argument must be non-empty')
+            if(not tarball_path.is_file()):
+                raise ValueError(f'File path argument must be a file')
+            tarball_path = Path(args.db_file).resolve()
+            cfg.check_readability('database tarball', tarball_path)
+            cfg.check_content_size('database tarball', tarball_path)
+        except:
+            log.error('provided database tarball file not valid! path=%s', args.db_file)
+            sys.exit(f'ERROR: database tarball file ({args.db_file}) not valid!')        
+
+        print('Check file...')
+        md5_sum = calc_md5_sum(tarball_path)
+        print(f'\tMD5 sum: {md5_sum}')
+
+        print(f'Extract DB tarball: file={tarball_path}, output={output_path}')
+        untar(tarball_path, output_path)
+
+        db_path = output_path.joinpath(tarball_path.name.replace('.gz', '').replace('.xz', '').replace('.tar', ''))
+        db_info = check(db_path)
+        if(db_info['major'] != bakta.__db_schema_version__):
+            sys.exit(f"ERROR: wrong major db detected! required={bakta.__db_schema_version__}, detected={db_info['major']}")
+        print('Successfully installed Bakta database!')
+        print(f"\tversion: {db_info['major']}.{db_info['minor']}")
+        print(f"\tType: {db_info['type']}")
+        print(f"\tDOI: {db_info['doi']}")
+        print(f'\tpath: {db_path}')
+
+        try:
+            db_path.chmod(DIR_PERMISSIONS)  # set write permissions on old (existing) directory with updated content
+            for db_file_path in db_path.iterdir():
+                db_file_path.chmod(DIR_PERMISSIONS if db_file_path.is_dir() else FILE_PERMISSIONS)
+        except:
+            sys.exit(f'ERROR: cannot set read|write|execute permissions on new database! path={db_path}, owner={db_path.owner()}, group={db_path.group()}, permissions={oct(db_path.stat().st_mode )[-3:]}')
+
+        print('Update AMRFinderPlus database...')
+        update_amrfinderplus_db(db_path)
+        print('\t... done')
+
+        print(f"\nRun Bakta using '--db {db_path}' or set a BAKTA_DB environment variable: 'export BAKTA_DB={db_path}'")
     elif(args.subcommand == 'update'):
         bu.test_dependency(bu.DEPENDENCY_AMRFINDERPLUS)
         tmp_path = cfg.check_tmp_path(args)
@@ -268,8 +322,8 @@ def main():
             sys.exit()
         required_version = compatible_sorted[0]
 
-        tarball_path = tmp_path.joinpath(f"{'db-light' if db_old_info['type'] == 'light' else 'db'}.tar.gz")
-        db_url = f"https://zenodo.org/record/{required_version['record']}/files/{'db-light' if db_old_info['type'] == 'light' else 'db'}.tar.gz"
+        tarball_path = tmp_path.joinpath(f"{'db-light' if db_old_info['type'] == 'light' else 'db'}.tar.xz")
+        db_url = f"https://zenodo.org/record/{required_version['record']}/files/{'db-light' if db_old_info['type'] == 'light' else 'db'}.tar.xz"
         print(f"Download database: v{required_version['major']}.{required_version['minor']}, type={db_old_info['type']}, {required_version['date']}, DOI: {required_version['doi']}, URL: {db_url}...")
         download(db_url, tarball_path)
         print('\t... done')

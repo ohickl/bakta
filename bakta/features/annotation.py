@@ -2,11 +2,12 @@
 import logging
 import re
 
+from typing import Sequence
+
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.io.insdc as insdc
 
-from typing import Sequence
 
 log = logging.getLogger('ANNOTATION')
 
@@ -19,13 +20,17 @@ RE_PROTEIN_PUTATIVE = re.compile(r'(potential|possible|probable|predicted)', fla
 RE_PROTEIN_NODE = re.compile(r'NODE_', flags=re.IGNORECASE)
 RE_PROTEIN_POTENTIAL_CONTIG_NAME = re.compile(r'(genome|shotgun)', flags=re.IGNORECASE)
 RE_PROTEIN_DOMAIN_CONTAINING = re.compile(r'domain-containing protein', flags=re.IGNORECASE)
+RE_PROTEIN_REMNANT = re.compile(r'Remnant of ', re.IGNORECASE)
+RE_PROTEIN_TMRNA = re.compile(r'TmRNA', flags=re.IGNORECASE)
 RE_PROTEIN_NO_LETTERS = re.compile(r'[^A-Za-z]')
-RE_PROTEIN_SUSPECT_CHARS = re.compile(r'[.@=?%]')
+RE_PROTEIN_SUSPECT_CHARS_DISCARD = re.compile(r'[.#]')
+RE_PROTEIN_SUSPECT_CHARS_REPLACE = re.compile(r'[@=?%]')
+RE_PROTEIN_SUSPECT_CHARS_BEGINNING = '_\-+.:,;/\\\''
 RE_PROTEIN_PERIOD_SEPARATOR = re.compile(r'([a-zA-Z0-9]+)\.([a-zA-Z0-9]+)')
 RE_PROTEIN_WRONG_PRIMES = re.compile(r'[\u2032\u0060\u00B4]')  # prime (′), grave accent (`), acute accent (´)
 RE_PROTEIN_WEIGHT = re.compile(r' [0-9]+(?:\.[0-9]+)? k?da ', flags=re.IGNORECASE)
 RE_PROTEIN_SYMBOL = re.compile(r'[A-Z][a-z]{2}[A-Z][0-9]?')
-RE_DOMAIN_OF_UNKNOWN_FUCTION = re.compile(r'(DUF\d{3,4})', flags=re.IGNORECASE)
+RE_DOMAIN_OF_UNKNOWN_FUNCTION = re.compile(r'(DUF\d{3,4})', flags=re.IGNORECASE)
 RE_UNCHARACTERIZED_PROTEIN_FAMILY = re.compile(r'(UPF\d{3,4})', flags=re.IGNORECASE)
 RE_GENE_CAPITALIZED = re.compile(r'^[A-Z].+', flags=re.DOTALL)
 RE_GENE_SUSPECT_CHARS = re.compile(r'[\?]', flags=re.DOTALL)
@@ -101,18 +106,17 @@ def combine_annotation(feature: dict):
             product = ips_product
         for db_xref in ips['db_xrefs']:
             db_xrefs.add(db_xref)
-    rank = 0
-    for hit in expert_hits:
-        db_xrefs.update(hit.get('db_xrefs', []))
-        expert_rank = hit['rank']
-        if(expert_rank > rank):
-            expert_genes = hit.get('gene', None)
-            if(expert_genes):
-                expert_genes = expert_genes.replace('/', ',').split(',')
-                genes.update(expert_genes)
-                gene = expert_genes[0]
-            product = hit.get('product', None)
-            rank = expert_rank
+
+    if(len(expert_hits) > 0):
+        top_expert_hit = sorted(expert_hits,key=lambda k: (k['rank'], k.get('score', 0), calc_annotation_score(k)), reverse=True)[0]
+        expert_genes = top_expert_hit.get('gene', None)
+        if(expert_genes):
+            expert_genes = expert_genes.replace('/', ',').split(',')
+            genes.update(expert_genes)
+            gene = expert_genes[0]
+        product = top_expert_hit.get('product', None)
+        for hit in expert_hits:
+            db_xrefs.update(hit.get('db_xrefs', []))
 
     if(product):
         product = revise_cds_product(product)
@@ -142,51 +146,51 @@ def combine_annotation(feature: dict):
     feature['db_xrefs'] = sorted(list(db_xrefs))
 
 
-def detect_feature_overlaps(genome: dict):
+def detect_feature_overlaps(data: dict):
     """Apply feature type specific hierarchical feature overlap filters.
     tRNA < tmRNA
     CDS < tmRNA, tRNA, rRNA, CRISPR
     sORF < mRNA, tRNA, rRNA, CRISPR, CDS (in-frame & entirely overlapping), sORF (shorter, weaker annotations)
     """
-    contig_t_rnas = {k['id']: [] for k in genome['contigs']}
-    for t_rna in genome['features'].get(bc.FEATURE_T_RNA, []):
-        t_rnas = contig_t_rnas[t_rna['contig']]
-        t_rnas.append(t_rna)
-    contig_tm_rnas = {k['id']: [] for k in genome['contigs']}
-    for tm_rna in genome['features'].get(bc.FEATURE_TM_RNA, []):
-        tm_rnas = contig_tm_rnas[tm_rna['contig']]
+    sequence_t_rnas = {seq['id']: [] for seq in data['sequences']}
+    for trna in [feat for feat in data['features'] if feat['type'] == bc.FEATURE_T_RNA]:
+        t_rnas = sequence_t_rnas[trna['sequence']]
+        t_rnas.append(trna)
+    sequence_tm_rnas = {seq['id']: [] for seq in data['sequences']}
+    for tm_rna in [feat for feat in data['features'] if feat['type'] == bc.FEATURE_TM_RNA]:
+        tm_rnas = sequence_tm_rnas[tm_rna['sequence']]
         tm_rnas.append(tm_rna)
-    contig_r_rnas = {k['id']: [] for k in genome['contigs']}
-    for r_rna in genome['features'].get(bc.FEATURE_R_RNA, []):
-        r_rnas = contig_r_rnas[r_rna['contig']]
+    sequence_r_rnas = {seq['id']: [] for seq in data['sequences']}
+    for r_rna in [feat for feat in data['features'] if feat['type'] == bc.FEATURE_R_RNA]:
+        r_rnas = sequence_r_rnas[r_rna['sequence']]
         r_rnas.append(r_rna)
-    contig_ncrna_regions = {k['id']: [] for k in genome['contigs']}
-    for ncRNA_region in genome['features'].get(bc.FEATURE_NC_RNA_REGION, []):
-        ncRNA_regions = contig_ncrna_regions[ncRNA_region['contig']]
+    sequence_ncrna_regions = {seq['id']: [] for seq in data['sequences']}
+    for ncRNA_region in [feat for feat in data['features'] if feat['type'] == bc.FEATURE_NC_RNA_REGION]:
+        ncRNA_regions = sequence_ncrna_regions[ncRNA_region['sequence']]
         ncRNA_regions.append(ncRNA_region)
-    contig_crispr_arrays = {k['id']: [] for k in genome['contigs']}
-    for crispr_array in genome['features'].get(bc.FEATURE_CRISPR, []):
-        crispr_arrays = contig_crispr_arrays[crispr_array['contig']]
+    sequence_crispr_arrays = {seq['id']: [] for seq in data['sequences']}
+    for crispr_array in [feat for feat in data['features'] if feat['type'] == bc.FEATURE_CRISPR]:
+        crispr_arrays = sequence_crispr_arrays[crispr_array['sequence']]
         crispr_arrays.append(crispr_array)
-    contig_cdss = {k['id']: [] for k in genome['contigs']}
-    contig_cdss_user_provided = {k['id']: [] for k in genome['contigs']}
-    for cds in genome['features'].get(bc.FEATURE_CDS, []):
+    sequence_cdss = {seq['id']: [] for seq in data['sequences']}
+    sequence_cdss_user_provided = {seq['id']: [] for seq in data['sequences']}
+    for cds in [feat for feat in data['features'] if feat['type'] == bc.FEATURE_CDS]:
         if(cds.get('source', None) == bc.CDS_SOURCE_USER):
-            cdss = contig_cdss_user_provided[cds['contig']]
+            cdss = sequence_cdss_user_provided[cds['sequence']]
         else:
-            cdss = contig_cdss[cds['contig']]
+            cdss = sequence_cdss[cds['sequence']]
         cdss.append(cds)
-    contig_sorfs = {k['id']: [] for k in genome['contigs']}
-    for sorf in genome['features'].get(bc.FEATURE_SORF, []):
-        sorfs = contig_sorfs[sorf['contig']]
+    sequence_sorfs = {seq['id']: [] for seq in data['sequences']}
+    for sorf in [feat for feat in data['features'] if feat['type'] == bc.FEATURE_SORF]:
+        sorfs = sequence_sorfs[sorf['sequence']]
         sorfs.append(sorf)
 
-    for contig in genome['contigs']:  # find feature overlaps contig-wise to increase the performance
-        log.debug('filter features on contig: %s', contig['id'])
+    for seq in data['sequences']:  # find feature overlaps sequence-wise to increase the performance
+        log.debug('filter features on seq: %s', seq['id'])
 
         # mark tRNAs overlapping with tmRNAs
-        for tRNA in contig_t_rnas[contig['id']]:
-            for tmRNA in contig_tm_rnas[contig['id']]:
+        for tRNA in sequence_t_rnas[seq['id']]:
+            for tmRNA in sequence_tm_rnas[seq['id']]:
                 if(tRNA['stop'] < tmRNA['start'] or tRNA['start'] > tmRNA['stop']):
                     continue
                 else:  # overlap -> remove tRNA
@@ -197,13 +201,13 @@ def detect_feature_overlaps(genome: dict):
                         'description': f"{bc.FEATURE_TM_RNA} overlap with ({tmRNA['product']}) at {overlap}"
                     }
                     log.info(
-                        "overlap: tRNA (%s) [%i, %i] overlapping with tmRNA (%s) [%i, %i] at %s on contig=%s",
-                        tRNA['product'], tRNA['start'], tRNA['stop'], tmRNA['product'], tmRNA['start'], tmRNA['stop'], overlap, tRNA['contig']
+                        "overlap: tRNA (%s) [%i, %i] overlapping with tmRNA (%s) [%i, %i] at %s on seq=%s",
+                        tRNA['product'], tRNA['start'], tRNA['stop'], tmRNA['product'], tmRNA['start'], tmRNA['stop'], overlap, tRNA['sequence']
                     )
 
         # mark ncRNA-regions overlapping with ncRNA-regions
-        for ncRNA_region in contig_ncrna_regions[contig['id']]:
-            for ncRNA_region_overlap in contig_ncrna_regions[contig['id']]:
+        for ncRNA_region in sequence_ncrna_regions[seq['id']]:
+            for ncRNA_region_overlap in sequence_ncrna_regions[seq['id']]:
                 if(ncRNA_region['stop'] < ncRNA_region_overlap['start'] or ncRNA_region['start'] > ncRNA_region_overlap['stop']):
                     continue
                 if(ncRNA_region['db_xrefs'][0] == ncRNA_region_overlap['db_xrefs'][0]):
@@ -217,14 +221,14 @@ def detect_feature_overlaps(genome: dict):
                             'description': f"{bc.FEATURE_NC_RNA_REGION} overlap with ({ncRNA_region_overlap['product']}) at {overlap}"
                         }
                         log.info(
-                            "overlap: ncRNA-region (%s) [%i, %i] overlapping with ncRNA-region (%s) [%i, %i] at %s on contig=%s, lower bitscore (%f/%f)",
-                            ncRNA_region['product'], ncRNA_region['start'], ncRNA_region['stop'], ncRNA_region_overlap['product'], ncRNA_region_overlap['start'], ncRNA_region_overlap['stop'], overlap, ncRNA_region['contig'], ncRNA_region['score'], ncRNA_region_overlap['score']
+                            "overlap: ncRNA-region (%s) [%i, %i] overlapping with ncRNA-region (%s) [%i, %i] at %s on seq=%s, lower bitscore (%f/%f)",
+                            ncRNA_region['product'], ncRNA_region['start'], ncRNA_region['stop'], ncRNA_region_overlap['product'], ncRNA_region_overlap['start'], ncRNA_region_overlap['stop'], overlap, ncRNA_region['sequence'], ncRNA_region['score'], ncRNA_region_overlap['score']
                         )
 
         # mark de novo-predicted CDS overlapping with tRNAs, tmRNAs, rRNAs, CRISPRs and user-provided CDS
-        for cds in contig_cdss[contig['id']]:
+        for cds in sequence_cdss[seq['id']]:
             # tmRNA overlaps
-            for tmRNA in contig_tm_rnas[contig['id']]:
+            for tmRNA in sequence_tm_rnas[seq['id']]:
                 if(cds['stop'] < tmRNA['start'] or cds['start'] > tmRNA['stop']):
                     continue
                 else:  # overlap -> remove cds
@@ -235,11 +239,11 @@ def detect_feature_overlaps(genome: dict):
                         'description': f"{bc.FEATURE_TM_RNA} overlap with ({tmRNA['product']}) at {overlap}"
                     }
                     log.info(
-                        "overlap: CDS (%s/%s) [%i, %i] overlapping tmRNA (%s) [%i, %i], %s, contig=%s",
-                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], tmRNA['gene'], tmRNA['start'], tmRNA['stop'], overlap, cds['contig']
+                        "overlap: CDS (%s/%s) [%i, %i] overlapping tmRNA (%s) [%i, %i], %s, seq=%s",
+                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], tmRNA['gene'], tmRNA['start'], tmRNA['stop'], overlap, cds['sequence']
                     )
             # tRNA overlaps
-            for tRNA in contig_t_rnas[contig['id']]:
+            for tRNA in sequence_t_rnas[seq['id']]:
                 if(cds['stop'] < tRNA['start'] or cds['start'] > tRNA['stop']):
                     continue
                 else:  # overlap -> remove cds
@@ -250,11 +254,11 @@ def detect_feature_overlaps(genome: dict):
                         'description': f"{bc.FEATURE_T_RNA} overlap with ({tRNA['product']}) at {overlap}"
                     }
                     log.info(
-                        "overlap: CDS (%s/%s) [%i, %i] overlapping tRNA (%s) [%i, %i], %s, contig=%s",
-                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], tRNA['gene'], tRNA['start'], tRNA['stop'], overlap, cds['contig']
+                        "overlap: CDS (%s/%s) [%i, %i] overlapping tRNA (%s) [%i, %i], %s, seq=%s",
+                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], tRNA['gene'], tRNA['start'], tRNA['stop'], overlap, cds['sequence']
                     )
             # rRNA overlaps
-            for rRNA in contig_r_rnas[contig['id']]:
+            for rRNA in sequence_r_rnas[seq['id']]:
                 if(cds['stop'] < rRNA['start'] or cds['start'] > rRNA['stop']):
                     continue
                 else:  # overlap -> remove cds
@@ -265,11 +269,11 @@ def detect_feature_overlaps(genome: dict):
                         'description': f"{bc.FEATURE_R_RNA} overlap with ({rRNA['product']}) at {overlap}"
                     }
                     log.info(
-                        "overlap: CDS (%s/%s) [%i, %i] overlapping rRNA (%s) [%i, %i], %s, contig=%s",
-                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], rRNA['gene'], rRNA['start'], rRNA['stop'], overlap, cds['contig']
+                        "overlap: CDS (%s/%s) [%i, %i] overlapping rRNA (%s) [%i, %i], %s, seq=%s",
+                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], rRNA['gene'], rRNA['start'], rRNA['stop'], overlap, cds['sequence']
                     )
             # CRISPR overlaps
-            for crispr in contig_crispr_arrays[contig['id']]:
+            for crispr in sequence_crispr_arrays[seq['id']]:
                 if(cds['stop'] < crispr['start'] or cds['start'] > crispr['stop']):
                     continue
                 else:  # overlap -> remove cds
@@ -280,31 +284,49 @@ def detect_feature_overlaps(genome: dict):
                         'description': f'overlaps {bc.FEATURE_CRISPR} at {overlap}'
                     }
                     log.info(
-                        "overlap: CDS (%s/%s) [%i, %i] overlapping CRISPR [%i, %i], %s, contig=%s",
-                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], crispr['start'], crispr['stop'], overlap, cds['contig']
+                        "overlap: CDS (%s/%s) [%i, %i] overlapping CRISPR [%i, %i], %s, seq=%s",
+                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], crispr['start'], crispr['stop'], overlap, cds['sequence']
                     )
             # user-provided CDS overlaps
-            for cds_user_provided in contig_cdss_user_provided[contig['id']]:
-                if(cds['stop'] < cds_user_provided['start'] or cds['start'] > cds_user_provided['stop']):
-                    continue
-                else:  # overlap -> remove cds
-                    overlap = min(cds['stop'], cds_user_provided['stop']) - max(cds['start'], cds_user_provided['start']) + 1
-                    if(overlap > bc.CDS_MAX_OVERLAPS):
-                        overlap = f"[{max(cds['start'], cds_user_provided['start'])},{min(cds['stop'], cds_user_provided['stop'])}]"
-                        cds['discarded'] = {
-                            'type': bc.DISCARD_TYPE_OVERLAP,
-                            'feature_type': bc.FEATURE_CDS,
-                            'description': f'overlaps {bc.FEATURE_CDS} at {overlap}'
-                        }
-                        log.info(
-                            "overlap: de novo CDS (%s/%s) [%i, %i] overlapping user-provided CDS [%i, %i], %s, contig=%s",
-                            cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], cds_user_provided['start'], cds_user_provided['stop'], overlap, cds['contig']
-                        )
+            for cds_user_provided in sequence_cdss_user_provided[seq['id']]:
+                overlap = 0
+                if(not cds_user_provided.get('edge', False)  and  not cds.get('edge', False)):  # both CDS not edge features
+                    if(cds['stop'] < cds_user_provided['start'] or cds['start'] > cds_user_provided['stop']):
+                        continue
+                    else:
+                        overlap = min(cds['stop'], cds_user_provided['stop']) - max(cds['start'], cds_user_provided['start']) + 1
+                elif(cds_user_provided.get('edge', False)  and  not cds.get('edge', False)):  # only user-provided CDS edge feature
+                    if(cds['stop'] > cds_user_provided['start']):  # overlapping de-novo CDS at sequence end
+                        overlap = cds['stop'] - max(cds['start'], cds_user_provided['start']) + 1
+                    elif(cds['start'] < cds_user_provided['stop']):  # overlapping de-novo CDS at sequence start
+                        overlap = min(cds['stop'], cds_user_provided['stop']) - cds['start'] + 1
+                    else:
+                        continue
+                elif(not cds_user_provided.get('edge', False)  and  cds.get('edge', False)):  # only de-novo CDS edge feature
+                    if(cds_user_provided['stop'] > cds['start']):  # overlapping user-provided CDS at sequence end
+                        overlap = cds_user_provided['stop'] - max(cds['start'], cds_user_provided['start']) + 1
+                    elif(cds_user_provided['start'] < cds['stop']):  # overlapping user-provided CDS at sequence start
+                        overlap = min(cds['stop'], cds_user_provided['stop']) - cds_user_provided['start'] + 1
+                    else:
+                        continue
+                elif(cds_user_provided.get('edge', False)  and  cds.get('edge', False)):  # both CDS edge features
+                    overlap = (seq['length'] - max(cds['start'], cds_user_provided['start']) + 1) + min(cds['stop'], cds_user_provided['stop'])
+                if(overlap > bc.CDS_MAX_OVERLAPS):
+                    overlap = f"[{max(cds['start'], cds_user_provided['start'])},{min(cds['stop'], cds_user_provided['stop'])}]"
+                    cds['discarded'] = {
+                        'type': bc.DISCARD_TYPE_OVERLAP,
+                        'feature_type': bc.FEATURE_CDS,
+                        'description': f'overlaps user-provided {bc.FEATURE_CDS} at {overlap}'
+                    }
+                    log.info(
+                        "overlap: de-novo CDS (%s/%s) [%i, %i] overlapping user-provided CDS [%i, %i], %s, seq=%s",
+                        cds.get('gene', '-'), cds.get('product', '-'), cds['start'], cds['stop'], cds_user_provided['start'], cds_user_provided['stop'], overlap, cds['sequence']
+                    )
 
         # remove sORF overlapping with tRNAs, tmRNAs, rRNAs, CRISPRs, inframe CDSs, shorter inframe sORFs
-        for sorf in contig_sorfs[contig['id']]:
+        for sorf in sequence_sorfs[seq['id']]:
             # tmRNA overlaps
-            for tmRNA in contig_tm_rnas[contig['id']]:
+            for tmRNA in sequence_tm_rnas[seq['id']]:
                 if(sorf['stop'] < tmRNA['start'] or sorf['start'] > tmRNA['stop']):
                     continue
                 else:  # overlap -> remove sorf
@@ -315,11 +337,11 @@ def detect_feature_overlaps(genome: dict):
                         'description': f"{bc.FEATURE_TM_RNA} overlap with ({tmRNA['product']}) at {overlap}"
                     }
                     log.info(
-                        "overlap: sORF (%s/%s) [%i, %i] overlapping tmRNA (%s) [%i, %i], %s, contig=%s",
-                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], tmRNA['gene'], tmRNA['start'], tmRNA['stop'], overlap, sorf['contig']
+                        "overlap: sORF (%s/%s) [%i, %i] overlapping tmRNA (%s) [%i, %i], %s, seq=%s",
+                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], tmRNA['gene'], tmRNA['start'], tmRNA['stop'], overlap, sorf['sequence']
                     )
             # tRNA overlaps
-            for tRNA in contig_t_rnas[contig['id']]:
+            for tRNA in sequence_t_rnas[seq['id']]:
                 if(sorf['stop'] < tRNA['start'] or sorf['start'] > tRNA['stop']):
                     continue
                 else:  # overlap -> remove sorf
@@ -330,11 +352,11 @@ def detect_feature_overlaps(genome: dict):
                         'description': f"{bc.FEATURE_T_RNA} overlap with ({tRNA['product']}) at {overlap}"
                     }
                     log.info(
-                        "overlap: sORF (%s/%s) [%i, %i] overlapping tRNA (%s) [%i, %i], %s, contig=%s",
-                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], tRNA['gene'], tRNA['start'], tRNA['stop'], overlap, sorf['contig']
+                        "overlap: sORF (%s/%s) [%i, %i] overlapping tRNA (%s) [%i, %i], %s, seq=%s",
+                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], tRNA['gene'], tRNA['start'], tRNA['stop'], overlap, sorf['sequence']
                     )
             # rRNA overlaps
-            for rRNA in contig_r_rnas[contig['id']]:
+            for rRNA in sequence_r_rnas[seq['id']]:
                 if(sorf['stop'] < rRNA['start'] or sorf['start'] > rRNA['stop']):
                     continue
                 else:  # overlap -> remove sorf
@@ -345,11 +367,11 @@ def detect_feature_overlaps(genome: dict):
                         'description': f"{bc.FEATURE_R_RNA} overlap with ({rRNA['product']}) at {overlap}"
                     }
                     log.info(
-                        "overlap: sORF (%s/%s) [%i, %i] overlapping rRNA (%s) [%i, %i], %s, contig=%s",
-                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], rRNA['gene'], rRNA['start'], rRNA['stop'], overlap, sorf['contig']
+                        "overlap: sORF (%s/%s) [%i, %i] overlapping rRNA (%s) [%i, %i], %s, seq=%s",
+                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], rRNA['gene'], rRNA['start'], rRNA['stop'], overlap, sorf['sequence']
                     )
             # CRISPR overlaps
-            for crispr in contig_crispr_arrays[contig['id']]:
+            for crispr in sequence_crispr_arrays[seq['id']]:
                 if(sorf['stop'] < crispr['start'] or sorf['start'] > crispr['stop']):
                     continue
                 else:  # overlap -> remove sorf
@@ -360,11 +382,11 @@ def detect_feature_overlaps(genome: dict):
                         'description': f'overlaps {bc.FEATURE_CRISPR} at {overlap}'
                     }
                     log.info(
-                        "overlap: sORF (%s/%s) [%i, %i] overlapping CRISPR [%i, %i], %s, contig=%s",
-                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], crispr['start'], crispr['stop'], overlap, sorf['contig']
+                        "overlap: sORF (%s/%s) [%i, %i] overlapping CRISPR [%i, %i], %s, seq=%s",
+                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], crispr['start'], crispr['stop'], overlap, sorf['sequence']
                     )
             # user-provided CDS overlaps
-            for cds_user_provided in contig_cdss_user_provided[contig['id']]:
+            for cds_user_provided in sequence_cdss_user_provided[seq['id']]:
                 if(sorf['stop'] < cds_user_provided['start'] or sorf['start'] > cds_user_provided['stop']):
                     continue
                 else:  # overlap -> remove sorf
@@ -375,19 +397,19 @@ def detect_feature_overlaps(genome: dict):
                         'description': f'overlaps {bc.FEATURE_CDS} at {overlap}'
                     }
                     log.info(
-                        "overlap: sORF (%s/%s) [%i, %i] overlapping user-provided CDS [%i, %i], %s, contig=%s",
-                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], cds_user_provided['start'], cds_user_provided['stop'], overlap, sorf['contig']
+                        "overlap: sORF (%s/%s) [%i, %i] overlapping user-provided CDS [%i, %i], %s, seq=%s",
+                        sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], cds_user_provided['start'], cds_user_provided['stop'], overlap, sorf['sequence']
                     )
 
             # sORF overlaps
-            for overlap_sorf in contig_sorfs[contig['id']]:
+            for overlap_sorf in sequence_sorfs[seq['id']]:
                 if(sorf['stop'] < overlap_sorf['start'] or sorf['start'] > overlap_sorf['stop']):
                     continue  # no overlap
                 elif(sorf['start'] == overlap_sorf['start'] and sorf['stop'] == overlap_sorf['stop']):
                     continue  # same
                 else:  # overlap -> remove sorf
-                    score_sorf = calc_sorf_annotation_score(sorf)
-                    score_overlap_sorf = calc_sorf_annotation_score(overlap_sorf)
+                    score_sorf = calc_cds_annotation_score(sorf)
+                    score_overlap_sorf = calc_cds_annotation_score(overlap_sorf)
 
                     if(score_sorf < score_overlap_sorf):  # lower annotation score
                         overlap = f"[{max(sorf['start'], overlap_sorf['start'])},{min(sorf['stop'], overlap_sorf['stop'])}]"
@@ -397,8 +419,8 @@ def detect_feature_overlaps(genome: dict):
                             'description': f"overlaps {bc.FEATURE_SORF} ({overlap_sorf.get('gene', '-')}/{overlap_sorf.get('product', '-')}) at {overlap} with lower score ({score_sorf}/{score_overlap_sorf})"
                         }
                         log.info(
-                            "overlap: sORF (%s/%s) [%i, %i] overlapping sORF (%s/%s) [%i, %i], %s, contig=%s, lower annotation score (%i/%i)",
-                            sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], overlap_sorf.get('gene', '-'), overlap_sorf.get('product', '-'), overlap_sorf['start'], overlap_sorf['stop'], overlap, sorf['contig'], score_sorf, score_overlap_sorf
+                            "overlap: sORF (%s/%s) [%i, %i] overlapping sORF (%s/%s) [%i, %i], %s, seq=%s, lower annotation score (%i/%i)",
+                            sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], overlap_sorf.get('gene', '-'), overlap_sorf.get('product', '-'), overlap_sorf['start'], overlap_sorf['stop'], overlap, sorf['sequence'], score_sorf, score_overlap_sorf
                         )
                     elif(score_sorf == score_overlap_sorf and len(sorf['aa']) < len(overlap_sorf['aa'])):  # equal annotation score but shorter sequence -> potential fragment or too short ORF prediction
                         overlap = f"[{max(sorf['start'], overlap_sorf['start'])},{min(sorf['stop'], overlap_sorf['stop'])}]"
@@ -408,41 +430,40 @@ def detect_feature_overlaps(genome: dict):
                             'description': f"overlaps {bc.FEATURE_SORF} ({overlap_sorf.get('gene', '-')}/{overlap_sorf.get('product', '-')}) at {overlap} with equal score ({score_sorf}) but lower length ({len(sorf['aa'])}/{len(overlap_sorf['aa'])})"
                         }
                         log.info(
-                            "overlap: sORF (%s/%s) [%i, %i] overlapping sORF (%s/%s) [%i, %i], %s, contig=%s, equal annotation score (%i), lower length (%i/%i)",
-                            sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], overlap_sorf.get('gene', '-'), overlap_sorf.get('product', '-'), overlap_sorf['start'], overlap_sorf['stop'], overlap, sorf['contig'], score_sorf, len(sorf['aa']), len(overlap_sorf['aa'])
+                            "overlap: sORF (%s/%s) [%i, %i] overlapping sORF (%s/%s) [%i, %i], %s, seq=%s, equal annotation score (%i), lower length (%i/%i)",
+                            sorf.get('gene', '-'), sorf.get('product', '-'), sorf['start'], sorf['stop'], overlap_sorf.get('gene', '-'), overlap_sorf.get('product', '-'), overlap_sorf['start'], overlap_sorf['stop'], overlap, sorf['sequence'], score_sorf, len(sorf['aa']), len(overlap_sorf['aa'])
                         )
 
 
-def calc_sorf_annotation_score(sorf: dict) -> int:
+def calc_cds_annotation_score(cds: dict) -> int:
     """Calc an annotation score rewarding each identification & annotation"""
     score = 0
 
-    if('ups' in sorf):
+    if('ups' in cds):
         score += 1
 
-    ips = sorf.get('ips', None)
+    ips = cds.get('ips', None)
     if(ips):
         score += 1
-        ips_gene = ips.get('gene', None)
-        if(ips_gene):
-            score += 1
-        ips_product = ips.get('product', None)
-        if(ips_product):
-            score += 1
+        score += calc_annotation_score(ips)
 
-    psc = sorf.get('psc', None)
+    psc = cds.get('psc', None)
     if(psc):
         score += 1
-        psc_gene = psc.get('gene', None)
-        if(psc_gene):
-            score += 1
-        psc_product = psc.get('product', None)
-        if(psc_product):
-            score += 1
+        score += calc_annotation_score(psc)
     log.debug(
-        'sorf score: contig=%s, start=%i, stop=%i, gene=%s, product=%s, score=%i',
-        sorf['contig'], sorf['start'], sorf['stop'], sorf.get('gene', '-'), sorf.get('product', '-'), score
+        'cds score: seq=%s, start=%i, stop=%i, gene=%s, product=%s, score=%i',
+        cds['sequence'], cds['start'], cds['stop'], cds.get('gene', '-'), cds.get('product', '-'), score
     )
+    return score
+
+
+def calc_annotation_score(orf:dict) -> int:
+    score = 0
+    if(orf.get('gene', None)):
+        score += 1
+    if(orf.get('product', None)):
+        score += 1
     return score
 
 
@@ -520,9 +541,19 @@ def revise_cds_product(product: str):
     product = re.sub(RE_PROTEIN_PERIOD_SEPARATOR, r'\1-\2', product)  # replace separator periods
     if(product != old_product):
         log.info('fix product: replace separator periods. new=%s, old=%s', product, old_product)
+    
+    old_product = product
+    if(product[0] in RE_PROTEIN_SUSPECT_CHARS_BEGINNING):  # remove suspect first character
+        product = product[1:]
+        log.info('fix product: replace invalid first character. new=%s, old=%s', product, old_product)
 
     old_product = product
-    product = RE_PROTEIN_SUSPECT_CHARS.sub('', product)  # remove suspect characters
+    product = RE_PROTEIN_SUSPECT_CHARS_DISCARD.sub('', product)  # remove suspect characters
+    if(product != old_product):
+        log.info('fix product: replace invalid characters. new=%s, old=%s', product, old_product)
+
+    old_product = product
+    product = RE_PROTEIN_SUSPECT_CHARS_REPLACE.sub(' ', product)  # replace suspect characters by single whitespace
     if(product != old_product):
         log.info('fix product: replace invalid characters. new=%s, old=%s', product, old_product)
 
@@ -537,8 +568,13 @@ def revise_cds_product(product: str):
         log.info('fix product: replace FOG ids. new=%s, old=%s', product, old_product)
 
     old_product = product
+    product = RE_PROTEIN_REMNANT.sub('', product)  # remove 'Remnant of's
+    if(product != old_product):
+        log.info('fix product: replace remnant ofs. new=%s, old=%s', product, old_product)
+
+    old_product = product
     dufs = []  # replace DUF-containing products
-    for m in RE_DOMAIN_OF_UNKNOWN_FUCTION.finditer(product):
+    for m in RE_DOMAIN_OF_UNKNOWN_FUNCTION.finditer(product):
         dufs.append(m.group(1).upper())
     if(len(dufs) >= 1):
         product = f"{' '.join(dufs)} domain{'s' if len(dufs) > 1 else ''}-containing protein"
@@ -577,10 +613,15 @@ def revise_cds_product(product: str):
         product = product.replace('_', '-')
         if(product != old_product):
             log.info('fix product: replace domain name underscores. new=%s, old=%s', product, old_product)
+    
+    old_product = product
+    if(RE_PROTEIN_TMRNA.fullmatch(product)):
+        product = ''
+        log.info('fix product: discard pure tmRNA product descriptions. new=%s, old=%s', product, old_product)
 
     old_product = product
     if(
-        RE_PROTEIN_CONTIG.search(product) or  # protein containing 'contig'
+        RE_PROTEIN_CONTIG.search(product) or  # protein containing 'sequence'
         RE_PROTEIN_NODE.search(product) or  # potential contig name (SPAdes)
         RE_PROTEIN_POTENTIAL_CONTIG_NAME.search(product) or  # potential contig name (SPAdes)
         RE_PROTEIN_NO_LETTERS.fullmatch(product)  # no letters -> set to Hypothetical
@@ -593,8 +634,8 @@ def revise_cds_product(product: str):
 
 def mark_as_hypothetical(feature: dict):
     log.info(
-        'marked as hypothetical: contig=%s, start=%i, stop=%i, strand=%s',
-        feature['contig'], feature['start'], feature['stop'], feature['strand']
+        'marked as hypothetical: seq=%s, start=%i, stop=%i, strand=%s',
+        feature['sequence'], feature['start'], feature['stop'], feature['strand']
     )
     feature['hypothetical'] = True
     feature['gene'] = None
@@ -620,8 +661,8 @@ def get_adjacent_genes(feature: dict, features: Sequence[dict], neighbors=3):
             upstream_genes.extend(downstream_genes)
             for gene in upstream_genes:
                 log.debug(
-                    'extracted neighbor genes: contig=%s, start=%i, stop=%i, gene=%s, product=%s',
-                    gene['contig'], gene['start'], gene['stop'], gene.get('gene', '-'), gene.get('product', '-')
+                    'extracted neighbor genes: seq=%s, start=%i, stop=%i, gene=%s, product=%s',
+                    gene['sequence'], gene['start'], gene['stop'], gene.get('gene', '-'), gene.get('product', '-')
                 )
             return upstream_genes
     return []
@@ -640,14 +681,14 @@ def select_gene_symbols(features: Sequence[dict]):
                     if(gene_symbol != old_gene_symbol):
                         feat['gene'] = gene_symbol
                         log.info(
-                            'gene product symbol selection: contig=%s, start=%i, stop=%i, new-gene=%s, old-gene=%s, genes=%s, product=%s',
-                            feat['contig'], feat['start'], feat['stop'], gene_symbol, old_gene_symbol, ','.join(feat['genes']), feat.get('product', '-')
+                            'gene product symbol selection: seq=%s, start=%i, stop=%i, new-gene=%s, old-gene=%s, genes=%s, product=%s',
+                            feat['sequence'], feat['start'], feat['stop'], gene_symbol, old_gene_symbol, ','.join(feat['genes']), feat.get('product', '-')
                         )
                         improved_genes.append(feat)
         else:  # multiple gene symbols of varying prefixes are available, e.g. acrS, envR
             log.debug(
-                'select gene symbol: contig=%s, start=%i, stop=%i, gene=%s, genes=%s, product=%s',
-                feat['contig'], feat['start'], feat['stop'], feat.get('gene', '-'), ','.join(feat['genes']), feat.get('product', '-')
+                'select gene symbol: seq=%s, start=%i, stop=%i, gene=%s, genes=%s, product=%s',
+                feat['sequence'], feat['start'], feat['stop'], feat.get('gene', '-'), ','.join(feat['genes']), feat.get('product', '-')
             )
             adjacent_genes = get_adjacent_genes(feat, features, neighbors=3)
             adjacent_gene_symbol_lists = [gene.get('genes', []) for gene in adjacent_genes]
@@ -671,8 +712,8 @@ def select_gene_symbols(features: Sequence[dict]):
             if(selected_gene_symbol != old_gene_symbol):
                 feat['gene'] = selected_gene_symbol
                 log.info(
-                    'gene neighborhood symbol selection: contig=%s, start=%i, stop=%i, new-gene=%s, old-gene=%s, genes=%s, product=%s',
-                    feat['contig'], feat['start'], feat['stop'], selected_gene_symbol, old_gene_symbol, ','.join(feat['genes']), feat.get('product', '-')
+                    'gene neighborhood symbol selection: seq=%s, start=%i, stop=%i, new-gene=%s, old-gene=%s, genes=%s, product=%s',
+                    feat['sequence'], feat['start'], feat['stop'], selected_gene_symbol, old_gene_symbol, ','.join(feat['genes']), feat.get('product', '-')
                 )
                 improved_genes.append(feat)
     return improved_genes

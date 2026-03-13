@@ -7,7 +7,7 @@ SO = namedtuple('SO', ['name', 'id'])
 SO_REPLICON = SO('replicon', 'SO:0001235')
 SO_REPLICON_CHROMOSOME = SO('chromosome', 'SO:0000340')
 SO_REPLICON_PLASMID = SO('plasmid', 'SO:0000155')
-SO_CONTIG = SO('contig', 'SO:0000149')
+SO_CONTIG = SO('sequence', 'SO:0000149')
 
 SO_OPERON = SO('operon', 'SO:0000178')
 SO_PROMOTER = SO('promoter', 'SO:0000167')
@@ -32,6 +32,8 @@ SO_PSEUDO_GENE = SO('pseudogene', 'SO:0000336')
 SO_CDS = SO('CDS', 'SO:0000316')
 SO_SORF = SO('sORF', 'SO:0002028')
 SO_SIGNAL_PEPTIDE = SO('signal_peptide', 'SO:0000418')
+
+SO_TRANSLATIONAL_FRAMESHIFT = SO('translational_frameshift', 'SO:0001210')
 
 SO_TRNA = SO('tRNA', 'SO:0000253')
 SO_TRNA_ALA = SO('alanyl_tRNA', 'SO:0000254')

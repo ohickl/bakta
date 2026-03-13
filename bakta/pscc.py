@@ -1,6 +1,5 @@
 import logging
 import subprocess as sp
-import sqlite3
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence, Tuple
@@ -8,6 +7,7 @@ from typing import Sequence, Tuple
 import bakta.config as cfg
 import bakta.constants as bc
 import bakta.features.orf as orf
+import bakta.utils as bu
 
 
 ############################################################################
@@ -36,8 +36,9 @@ def search(cdss: Sequence[dict]) -> Tuple[Sequence[dict], Sequence[dict], Sequen
         '--query-cover', str(int(bc.MIN_PSC_COVERAGE * 100)),  # '80'
         '--subject-cover', str(int(bc.MIN_PSC_COVERAGE * 100)),  # '80'
         '--max-target-seqs', '1',  # single best output
-        '--outfmt', '6',
+        '--outfmt', '6', 'qseqid', 'sseqid', 'qlen', 'slen', 'length', 'pident', 'evalue', 'bitscore',
         '--threads', str(cfg.threads),
+        '--load-threads', str(min(cfg.threads, 8)),  # limit load threads to max 8
         '--tmpdir', str(cfg.tmp_path),  # use tmp folder
         '--block-size', '3',  # slightly increase block size for faster executions
         '--fast'
@@ -59,22 +60,25 @@ def search(cdss: Sequence[dict]) -> Tuple[Sequence[dict], Sequence[dict], Sequen
     cds_by_hexdigest = orf.get_orf_dictionary(cdss)
     with diamond_output_path.open() as fh:
         for line in fh:
-            (aa_identifier, cluster_id, identity, alignment_length, align_mismatches,
-                align_gaps, query_start, query_end, subject_start, subject_end,
-                evalue, bitscore) = line.split('\t')
+            (aa_identifier, cluster_id, query_length, subject_length, alignment_length, identity, evalue, bitscore) = line.split('\t')
             cds = cds_by_hexdigest[aa_identifier]
             query_cov = int(alignment_length) / len(cds['aa'])
+            subject_cov = int(alignment_length) / int(subject_length)
             identity = float(identity) / 100
-            if(query_cov >= bc.MIN_PSC_COVERAGE and identity >= bc.MIN_PSCC_IDENTITY):
+            bitscore = float(bitscore)
+            evalue = float(evalue)
+            if(query_cov >= bc.MIN_PSC_COVERAGE and subject_cov >= bc.MIN_PSC_COVERAGE and identity >= bc.MIN_PSCC_IDENTITY):
                 cds['pscc'] = {
                     DB_PSCC_COL_UNIREF50: cluster_id,
                     'query_cov': query_cov,
+                    'subject_cov': subject_cov,
                     'identity': identity,
-                    'valid': identity >= bc.MIN_PSC_IDENTITY
+                    'score': bitscore,
+                    'evalue': evalue
                 }
                 log.debug(
-                    'homology: contig=%s, start=%i, stop=%i, strand=%s, aa-length=%i, query-cov=%0.3f, identity=%0.3f, UniRef90=%s',
-                    cds['contig'], cds['start'], cds['stop'], cds['strand'], len(cds['aa']), query_cov, identity, cluster_id
+                    'homology: seq=%s, start=%i, stop=%i, strand=%s, aa-length=%i, query-cov=%0.3f, subject-cov=%0.3f, identity=%0.3f, score=%0.1f, evalue=%1.1e, UniRef50=%s',
+                    cds['sequence'], cds['start'], cds['stop'], cds['strand'], len(cds['aa']), query_cov, subject_cov, identity, bitscore, evalue, cluster_id
                 )
 
     psccs_found = []
@@ -93,25 +97,22 @@ def lookup(features: Sequence[dict], pseudo: bool = False):
     no_pscc_lookups = 0
     try:
         rec_futures = []
-        with sqlite3.connect(f"file:{cfg.db_path.joinpath('bakta.db')}?mode=ro&nolock=1&cache=shared", uri=True, check_same_thread=False) as conn:
-            conn.execute('PRAGMA omit_readlock;')
-            conn.row_factory = sqlite3.Row
-            with ThreadPoolExecutor(max_workers=max(10, cfg.threads)) as tpe:  # use min 10 threads for IO bound non-CPU lookups
-                for feature in features:
-                    uniref50_id = None
-                    if(pseudo):  # if pseudogene use pseudogene info
-                        if('psc' in feature[bc.PSEUDOGENE]):
-                            uniref50_id = feature[bc.PSEUDOGENE]['psc'].get(DB_PSCC_COL_UNIREF50, None)
-                    else:
-                        if('psc' in feature):
-                            uniref50_id = feature['psc'].get(DB_PSCC_COL_UNIREF50, None)
-                        elif('pscc' in feature):
-                            uniref50_id = feature['pscc'].get(DB_PSCC_COL_UNIREF50, None)
-                    if(uniref50_id is not None):
-                        if(bc.DB_PREFIX_UNIREF_50 in uniref50_id):
-                            uniref50_id = uniref50_id[9:]  # remove 'UniRef50_' prefix
-                        future = tpe.submit(fetch_db_pscc_result, conn, uniref50_id)
-                        rec_futures.append((feature, future))
+        with ThreadPoolExecutor(max_workers=max(10, cfg.threads)) as tpe:  # use min 10 threads for IO bound non-CPU lookups
+            for feature in features:
+                uniref50_id = None
+                if(pseudo):  # if pseudogene use pseudogene info
+                    if('psc' in feature[bc.PSEUDOGENE]):
+                        uniref50_id = feature[bc.PSEUDOGENE]['psc'].get(DB_PSCC_COL_UNIREF50, None)
+                else:
+                    if('psc' in feature):
+                        uniref50_id = feature['psc'].get(DB_PSCC_COL_UNIREF50, None)
+                    elif('pscc' in feature):
+                        uniref50_id = feature['pscc'].get(DB_PSCC_COL_UNIREF50, None)
+                if(uniref50_id is not None):
+                    if(bc.DB_PREFIX_UNIREF_50 in uniref50_id):
+                        uniref50_id = uniref50_id[9:]  # remove 'UniRef50_' prefix
+                    future = tpe.submit(fetch_db_pscc_result, uniref50_id)
+                    rec_futures.append((feature, future))
 
         for (feature, future) in rec_futures:
             rec = future.result()
@@ -120,11 +121,14 @@ def lookup(features: Sequence[dict], pseudo: bool = False):
                 if(pseudo):
                     feature[bc.PSEUDOGENE]['pscc'] = pscc
                 else:
-                    feature['pscc'] = pscc
+                    if('pscc' in feature):
+                        feature['pscc'] = {**feature['pscc'], **pscc}  # merge dicts, add PSCC annotation info to PSCC alignment info
+                    else:
+                        feature['pscc'] = pscc  # add PSCC annotation info
                 no_pscc_lookups += 1
                 log.debug(
-                    'lookup: contig=%s, start=%i, stop=%i, strand=%s, UniRef50=%s, product=%s',
-                    feature['contig'], feature['start'], feature['stop'], feature['strand'], pscc.get(DB_PSCC_COL_UNIREF50, ''), pscc.get(DB_PSCC_COL_PRODUCT, '')
+                    'lookup: seq=%s, start=%i, stop=%i, strand=%s, UniRef50=%s, product=%s',
+                    feature['sequence'], feature['start'], feature['stop'], feature['strand'], pscc.get(DB_PSCC_COL_UNIREF50, ''), pscc.get(DB_PSCC_COL_PRODUCT, '')
                 )
             else:
                 log.debug('lookup: ID not found! uniref50_id=%s', uniref50_id)
@@ -134,12 +138,13 @@ def lookup(features: Sequence[dict], pseudo: bool = False):
     log.info('looked-up=%i', no_pscc_lookups)
 
 
-def fetch_db_pscc_result(conn: sqlite3.Connection, uniref50_id: str):
-    c = conn.cursor()
-    c.execute('select * from pscc where uniref50_id=?', (uniref50_id,))
-    rec = c.fetchone()
-    c.close()
-    return rec
+def fetch_db_pscc_result(uniref50_id: str):
+    with bu.get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute('select * from pscc where uniref50_id=?', (uniref50_id,))
+        rec = c.fetchone()
+        c.close()
+        return rec
 
 
 def parse_annotation(rec) -> dict:

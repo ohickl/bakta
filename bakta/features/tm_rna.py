@@ -13,7 +13,7 @@ import bakta.utils as bu
 log = logging.getLogger('TM_RNA')
 
 
-def predict_tm_rnas(genome: dict, contigs_path: Path):
+def predict_tm_rnas(data: dict, sequences_path: Path):
     """Search for tmRNA sequences."""
 
     txt_output_path = cfg.tmp_path.joinpath('tmrna.tsv')
@@ -23,7 +23,7 @@ def predict_tm_rnas(genome: dict, contigs_path: Path):
         f'-gc{cfg.translation_table}',
         '-w',  # batch mode
         '-o', str(txt_output_path),
-        str(contigs_path)
+        str(sequences_path)
     ]
     if(cfg.complete):
         cmd.append('-c')  # complete circular sequence(s)
@@ -45,14 +45,14 @@ def predict_tm_rnas(genome: dict, contigs_path: Path):
         raise Exception(f'aragorn error! error code: {proc.returncode}')
 
     tmrnas = []
-    contigs = {c['id']: c for c in genome['contigs']}
+    sequences = {seq['id']: seq for seq in data['sequences']}
     with txt_output_path.open() as fh:
-        contig_id = None
+        sequence_id = None
         for line in fh:
             line = line.strip()
             cols = line.split()
             if(line[0] == '>'):
-                contig_id = cols[0][1:]
+                sequence_id = cols[0][1:]
             elif(len(cols) == 5):
                 (nr, type, location, tag_location, tag_aa) = line.split()
                 strand = bc.STRAND_FORWARD
@@ -62,28 +62,41 @@ def predict_tm_rnas(genome: dict, contigs_path: Path):
                 (start, stop) = location[1:-1].split(',')
                 start = int(start)
                 stop = int(stop)
+                tag_start, tag_stop = [int(pos) for pos in tag_location.split(',')]
 
                 if(start > 0 and stop > 0):  # prevent edge tmRNA on linear sequences
                     tmrna = OrderedDict()
                     tmrna['type'] = bc.FEATURE_TM_RNA
-                    tmrna['contig'] = contig_id
+                    tmrna['sequence'] = sequence_id
                     tmrna['start'] = start
                     tmrna['stop'] = stop
                     tmrna['strand'] = strand
                     tmrna['gene'] = 'ssrA'
                     tmrna['product'] = 'transfer-messenger RNA, SsrA'
                     tmrna['db_xrefs'] = [so.SO_TMRNA.id]
+                    tmrna['tag'] = {
+                        'start': start + tag_start - 1,
+                        'stop': start + tag_stop - 1,
+                        'aa': tag_aa.replace('*', '')
+                    }
+                    if (strand == bc.STRAND_REVERSE):
+                        tmrna['tag']['start'] = stop - tag_stop + 1
+                        tmrna['tag']['stop'] = stop - tag_start + 1
 
-                    nt = bu.extract_feature_sequence(tmrna, contigs[contig_id])  # extract nt sequences
+                    nt = bu.extract_feature_sequence(tmrna, sequences[sequence_id])  # extract nt sequences
                     tmrna['nt'] = nt
+
+                    tag = tmrna['tag']
+                    tag_nt = bu.extract_feature_sequence({'start': tag['start'], 'stop': tag['stop'], 'strand': strand}, sequences[sequence_id])  # extract nt sequences
+                    tag['nt'] = tag_nt
 
                     if(start > stop):
                         tmrna['edge'] = True  # mark tmRNA as edge feature
 
                     tmrnas.append(tmrna)
                     log.info(
-                        'contig=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, nt=[%s..%s]',
-                        tmrna['contig'], tmrna['start'], tmrna['stop'], tmrna['strand'], tmrna['gene'], tmrna['product'], nt[:10], nt[-10:]
+                        'seq=%s, start=%i, stop=%i, strand=%s, gene=%s, product=%s, nt=[%s..%s]',
+                        tmrna['sequence'], tmrna['start'], tmrna['stop'], tmrna['strand'], tmrna['gene'], tmrna['product'], nt[:10], nt[-10:]
                     )
     log.info('predicted=%i', len(tmrnas))
     return tmrnas

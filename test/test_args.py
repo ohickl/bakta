@@ -285,13 +285,32 @@ def test_proteins_failiing(parameters, tmpdir):
 @pytest.mark.parametrize(
     'parameters',
     [
+        (['--hmms']),  # not provided
+        (['--hmms', '']),  # empty
+        (['--hmms', 'foo']),  # not existing
+        (['--hmms', 'test/data/empty']),  # empty file
+        (['--hmms', 'test/data/nonsense.txt'])  # nonsense file
+    ]
+)
+def test_hmms_failiing(parameters, tmpdir):
+    # test HMM file arguments
+    proc = run(
+        ['bin/bakta', '--db', 'test/db', '--output', tmpdir, '--force'] + 
+        parameters + 
+        ['--skip-tmrna', '--skip-trna', '--skip-rrna', '--skip-ncrna', '--skip-ncrna-region', '--skip-crispr', '--skip-sorf', '--skip-ori', '--skip-gap', '--skip-plot'] +
+        ['test/data/NC_002127.1.fna']
+    )
+    assert proc.returncode != 0
+
+
+@pytest.mark.parametrize(
+    'parameters',
+    [
         (['--locus']),  # not provided
         (['--locus', '']),  # empty
         (['--locus', ' ']),  # whitespace only
         (['--locus', '  ']),  # whitespaces only
         (['--locus', 'fo o']),  # containing whitespace
-        (['--locus', 'A123:']),  # containing colon (incompatible with circos)
-        (['--locus', 'A123#']),  # containing pound (incompatible with circos)
         (['--locus', 'ABCDEFGHIJKLMNOPQRSTU'])  # more than 20 characters
     ]
 )
@@ -311,7 +330,7 @@ def test_locus_failiing(parameters, tmpdir):
     [
         (['--locus', 'ABC']),
         (['--locus', 'ABCDEFGHIJKLMNOPQRST']),
-        (['--locus', 'A123_.*-'])
+        (['--locus', 'A123_.*-:#'])
     ]
 )
 def test_locus_ok(parameters, tmpdir):
@@ -439,6 +458,48 @@ def test_locustag_compliant_ok(parameters, tmpdir):
     # test locus-tag prefix arguments
     proc = run(
         ['bin/bakta', '--db', 'test/db', '--output', tmpdir, '--force', '--compliant', '--skip-plot'] +
+        parameters +
+        SKIP_PARAMETERS +
+        ['test/data/NC_002127.1.fna']
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    'parameters',
+    [
+        (['--locus-tag-increment']),  # not provided
+        (['--locus-tag-increment', '']),  # empty
+        (['--locus-tag-increment', ' ']),  # whitespace only
+        (['--locus-tag-increment', 'A']),  # wrong characters
+        (['--locus-tag-increment', 'a']),  # wrong characters
+        (['--locus-tag-increment', '0']),  # wrong number
+        (['--locus-tag-increment', '11']),  # wrong number
+    ]
+)
+def test_locustag_increment_failiing(parameters, tmpdir):
+    # test locus-tag increment arguments
+    proc = run(
+        ['bin/bakta', '--db', 'test/db', '--output', tmpdir, '--force', '--skip-plot'] +
+        parameters +
+        SKIP_PARAMETERS +
+        ['test/data/NC_002127.1.fna']
+    )
+    assert proc.returncode != 0
+
+
+@pytest.mark.parametrize(
+    'parameters',
+    [
+        (['--locus-tag-increment', '1']),
+        (['--locus-tag-increment', '5']),
+        (['--locus-tag-increment', '10'])
+    ]
+)
+def test_locustag_increment_ok(parameters, tmpdir):
+    # test locus-tag increment arguments
+    proc = run(
+        ['bin/bakta', '--db', 'test/db', '--output', tmpdir, '--force', '--skip-plot'] +
         parameters +
         SKIP_PARAMETERS +
         ['test/data/NC_002127.1.fna']
